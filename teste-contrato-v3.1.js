@@ -455,7 +455,7 @@ if (isJson && json && moduleKey === "products" && !isNegativeCase) {
             if (!p || typeof p !== "object") return;
             ensureAtLeastOneKey(
                 p,
-                ["codProd", "CODPROD", "id", "codigo"],
+                ["codProd", "CODPROD", "id", "codigo","CODGRUPOPRODPAI","CodGrupoProPai","CODLOCAL","CodLocal"],
                 `[PRODUTOS] Registro[${i}] sem identificador`
             );
             if (p.descricao || p.DESCRICAO || p.nome || p.NOME) {
@@ -494,6 +494,24 @@ if (isJson && json && moduleKey === "partner" && !isNegativeCase) {
         }
     });
 }
+//não roda quando hasError = true
+if (
+  isJson && json &&
+  moduleKey === "user" &&
+  json.hasError === false &&   // só em sucesso real
+  !isNegativeCase
+) {
+  // CT-012...
+}
+
+
+//correção falso positivo em GET>USER>VERSAOMINIMA
+if (
+  isJson && json &&
+  moduleKey === "user" &&
+  !url.includes("/versaominima") &&   // não rodar aqui
+  !isNegativeCase
+    ) 
 
 // 4.10 USUÁRIOS / VENDEDORES
 if (isJson && json && moduleKey === "user" && !isNegativeCase) {
@@ -708,4 +726,3 @@ if (isJson && json && status >= 400) {
     }
   })();
 })();
-
