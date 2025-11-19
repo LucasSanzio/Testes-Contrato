@@ -479,7 +479,7 @@ if (isJson && json && moduleKey === "products" && !isNegativeCase && !hasErrorFl
             if (!p || typeof p !== "object") return;
             ensureAtLeastOneKey(
                 p,
-                ["codProd", "CODPROD", "id", "codigo","CODGRUPOPRODPAI","CodGrupoProPai","CODLOCAL","CodLocal"],
+                ["name","codProd", "CODPROD", "id", "codigo","CODGRUPOPRODPAI","CodGrupoProPai","CODLOCAL","CodLocal","codParc","CODPARC","codVend","CODVEND","CODTIPPARC"],
                 `[PRODUTOS] Registro[${i}] sem identificador`
             );
             if (p.descricao || p.DESCRICAO || p.nome || p.NOME) {
@@ -505,7 +505,7 @@ if (isJson && json && moduleKey === "partner" && !isNegativeCase && !hasErrorFla
             data.forEach((p, i) => {
                 ensureAtLeastOneKey(
                     p,
-                    ["codParc", "CODPARC"],
+                    ["codParc", "CODPARC","CodTiParc","CODTIPPARC","Value","VALUE"],
                     `[PARCEIROS] Item[${i}] sem codParc`
                 );
                 if (p.CGC_CPF || p.CNPJ || p.cnpj || p.cpf) {
