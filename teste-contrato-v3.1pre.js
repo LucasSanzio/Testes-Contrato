@@ -1,4 +1,43 @@
 // Script pré-requisição global
+// === Auto-injeção de codVend em endpoints de partner/list* ===
+(function addCodVendToPartnerLists() {
+  try {
+    const url = pm.request.url;
+    const path = url.getPath(); // ex: "/partner/listByName"
+
+    // Só mexe em rotas de partner com "list" no final do path
+    const isPartner = path.startsWith("/partner/");
+    const isListLike = path.toLowerCase().includes("list");
+
+    if (!isPartner || !isListLike) {
+      return; // não é alvo, sai fora
+    }
+
+    // Já tem codVend na query? então não faz nada
+    const hasCodVend =
+      url.query &&
+      url.query.some(q => q && q.key === "codVend");
+
+    if (hasCodVend) {
+      return;
+    }
+
+    // Pega codVend de variável (collection ou environment)
+    const codVend =
+      pm.collectionVariables.get("codVend") ||
+      pm.environment.get("codVend");
+
+    if (!codVend) {
+      // nada configurado, não adiciona pra não quebrar
+      console.warn("[AUTO-codVend] Variável codVend não configurada.");
+      return;
+    }
+
+    url.addQueryParams({ key: "codVend", value: String(codVend) });
+  } catch (e) {
+    console.warn("[AUTO-codVend] Erro ao injetar codVend:", e);
+  }
+})();
 
 // 1) Basic Auth
 (function setupBasicAuth() {
@@ -7,7 +46,7 @@
 
   if (username && password) {
     const credentials = btoa(username + ':' + password);
-    pm.variables.set('auth_token', credentials);
+    pm.variables.set('auto_token', credentials);
   }
 })();
 
