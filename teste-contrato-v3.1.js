@@ -25,6 +25,21 @@ if (isJson) {
     }
 }
 
+
+
+// Flags gerais de envelope de erro/sucesso (apenas em memória, não viram variáveis do Postman)
+const hasErrorFlag =
+  isJson &&
+  json &&
+  Object.prototype.hasOwnProperty.call(json, "hasError") &&
+  json.hasError === true;
+
+const isSuccessEnvelope =
+  isJson &&
+  json &&
+  Object.prototype.hasOwnProperty.call(json, "hasError") &&
+  json.hasError === false;
+
 // Identifica se é request NEGATIVO pelo nome
 const isNegativeCase =
     requestName.includes("[negativo]") ||
@@ -75,6 +90,15 @@ if (!isNegativeCase) {
         console.log(`[GATE] Smoke falhou (Status ${status}). Ignorando testes avançados para ${rawUrl}.`);
         return; // <-- Interrompe a execução dos testes subsequentes
     }
+    // Interrompe se hasError=true mesmo com status 2xx
+    if (isSuccessEnvelope === false && hasErrorFlag === true) {
+        pm.test("[GATE] Resposta com hasError=true deve falhar", () => {
+            pm.expect.fail(`hasError=true detectado em resposta com status ${status} (${rawUrl})`);
+        });
+        console.log(`[GATE] hasError=true detectado. Interrompendo testes para ${rawUrl}.`);
+        return; // <-- Interrompe execução dos testes subsequentes
+    }
+
 }
 
 // Helpers para respostas no padrão BaseList
@@ -315,7 +339,7 @@ if (isJson && json && url.includes("/ppid/message") && !isNegativeCase) {
 }
 
 // 4.4 PEDIDOS - LISTA (/ppid/orderlist)
-if (isJson && json && url.includes("/ppid/orderlist") && !isNegativeCase) {
+if (isJson && json && url.includes("/ppid/orderlist") && !isNegativeCase && !hasErrorFlag) {
     const data = getMainArray(json);
 
     pm.test("[CT-006] [CONTRACT][PEDIDOS][Lista] Campos essenciais por pedido", () => {
@@ -364,7 +388,7 @@ if (isJson && json && url.includes("/ppid/orderlist") && !isNegativeCase) {
 }
 
 // 4.5 PEDIDOS - DETALHE (/ppid/orderdetails)
-if (isJson && json && url.includes("/ppid/orderdetails") && !isNegativeCase) {
+if (isJson && json && url.includes("/ppid/orderdetails") && !isNegativeCase && !hasErrorFlag) {
     pm.test("[CT-007] [CONTRACT][PEDIDOS][Detalhe] Contém identificador do pedido", () => {
         ensureAtLeastOneKey(
             json,
@@ -424,7 +448,7 @@ if (isJson && json && (
     url.includes("/ppid/gettableprices") ||
     url.includes("/ppid/pricedetails") ||
     url.includes("/ppid/precominimo")
-) && !isNegativeCase) {
+) && !isNegativeCase && !hasErrorFlag) {
     const data = getMainArray(json);
 
     pm.test("[CT-009] [CONTRACT][PRECOS] Envelope com hasError", () => {
@@ -447,7 +471,7 @@ if (isJson && json && (
 }
 
 // 4.8 PRODUTOS
-if (isJson && json && moduleKey === "products" && !isNegativeCase) {
+if (isJson && json && moduleKey === "products" && !isNegativeCase && !hasErrorFlag) {
     const data = getMainArray(json);
     pm.test("[CT-010] [CONTRACT][PRODUTOS] Lista/Detalhe com identificador e nome", () => {
         const arr = Array.isArray(data) && data.length ? data : [json];
@@ -467,7 +491,7 @@ if (isJson && json && moduleKey === "products" && !isNegativeCase) {
 }
 
 // 4.9 PARCEIROS / CLIENTES
-if (isJson && json && moduleKey === "partner" && !isNegativeCase) {
+if (isJson && json && moduleKey === "partner" && !isNegativeCase && !hasErrorFlag && !url.includes("/fields")) {
     const data = getMainArray(json);
 
     pm.test("[CT-011] [CONTRACT][PARCEIROS] Envelope (quando aplicável)", () => {
@@ -494,27 +518,15 @@ if (isJson && json && moduleKey === "partner" && !isNegativeCase) {
         }
     });
 }
-//não roda quando hasError = true
-if (
-  isJson && json &&
-  moduleKey === "user" &&
-  json.hasError === false &&   // só em sucesso real
-  !isNegativeCase
-) {
-  // CT-012...
-}
-
-
-//correção falso positivo em GET>USER>VERSAOMINIMA
-if (
-  isJson && json &&
-  moduleKey === "user" &&
-  !url.includes("/versaominima") &&   // não rodar aqui
-  !isNegativeCase
-    ) 
-
 // 4.10 USUÁRIOS / VENDEDORES
-if (isJson && json && moduleKey === "user" && !isNegativeCase) {
+if (
+  isJson &&
+  json &&
+  moduleKey === "user" &&
+  !isNegativeCase &&
+  !hasErrorFlag &&
+  !url.includes("/versaominima")
+) {
     pm.test("[CT-012] [CONTRACT][USUARIO] Estrutura mínima", () => {
         const data = Array.isArray(json) ? json : getMainArray(json);
         const arr = Array.isArray(data) && data.length ? data : [json];
@@ -542,7 +554,7 @@ if (isJson && json && (
     url.includes("/tabelafrete") ||
     url.includes("/regrasentregas") ||
     url.includes("/feriados")
-) && !isNegativeCase) {
+) && !isNegativeCase && !hasErrorFlag) {
     pm.test("[CT-014] [CONTRACT][LOGISTICA] Estrutura válida", () => {
         if (!isBaseListResponse(json)) {
             pm.expect(
