@@ -329,41 +329,6 @@ Validar que consultas de **documentos** que poderiam retornar binário (PDF, bol
 
 ---
 
-## CT-016 – Contrato de SCHEMA estável por endpoint
-
-**Objetivo geral**
-
-Garantir que o **conjunto de campos (schema)** de certos endpoints seja estável e consistente ao longo do tempo, especialmente para `/ppid/getprices`.
-
-**Testes incluídos**
-
-1. **[SCHEMA] Conjunto de chaves estável**  
-   - *Objetivo*: Verificar se o conjunto de campos de cada item está exatamente igual ao esperado (ex.: `codProd`, `codTab`, `nomeTab`, `nuTab`, `preco`, `precoFlex`).  
-   - *Se passa*: o formato dos objetos está estável, sem mudanças inesperadas.  
-   - *Se falha*: alguém adicionou/removeu/renomeou campos, quebrando o contrato com o front ou integrações.
-
-2. **[SCHEMA] Todos os itens seguem o mesmo conjunto de chaves**  
-   - *Objetivo*: Garantir que todos os itens da lista tenham o mesmo “formato” de campos.  
-   - *Se passa*: a lista é homogênea e previsível.  
-   - *Se falha*: alguns itens estão vindo com campos a mais/menos, indicando problema na montagem dos dados.
-
-3. **[SCHEMA] Conjunto de chaves estável (baseline)**  
-   - *Objetivo*: Comparar o schema atual com um **baseline** salvo anteriormente, verificando se continua igual.  
-   - *Se passa*: não houve mudança de contrato desde que o baseline foi gravado.  
-   - *Se falha*: houve alteração de contrato em produção (pode ser mudança planejada ou bug).
-
-4. **[SCHEMA] Baseline inicial registrada**  
-   - *Objetivo*: Confirmar que o baseline inicial foi salvo quando o teste rodou pela primeira vez.  
-   - *Se passa*: o teste está preparado para comparações futuras.  
-   - *Se falha*: algo impediu o salvamento do baseline, o que reduz a proteção contra mudanças.
-
-5. **[SCHEMA] Erro de script (tratado)**  
-   - *Objetivo*: Garantir que, se o script de schema falhar internamente, isso seja marcado claramente.  
-   - *Se passa*: o script rodou sem erro interno.  
-   - *Se falha*: o problema está no próprio teste (script), não necessariamente na API.
-
----
-
 ## CT-017 – Contratos binários (PDF / DANFE / BOLETO / Imagens)
 
 **Objetivo geral**
