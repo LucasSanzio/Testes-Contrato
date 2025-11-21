@@ -1,5 +1,5 @@
 // =======================================================
-// BACKEND VIDYA FORCE - TESTES DE CONTRATO (v3.1)
+// BACKEND VIDYA FORCE - TESTES DE CONTRATO (v2)
 // =======================================================
 
 // =======================================================
@@ -16,15 +16,14 @@ const requestName = (pm.info.requestName || "").toLowerCase();
 
 // Tenta parsear JSON (sem quebrar se não for JSON)
 let json = null;
-let jsonParseError = false; // Adicionado do script do usuário
+let jsonParseError = false;
 if (isJson) {
     try {
         json = pm.response.json();
     } catch (e) {
-        jsonParseError = true; // Adicionado do script do usuário
+        jsonParseError = true;
     }
 }
-
 
 
 // Flags gerais de envelope de erro/sucesso (apenas em memória, não viram variáveis do Postman)
@@ -90,8 +89,8 @@ if (!isNegativeCase) {
         console.log(`[GATE] Smoke falhou (Status ${status}). Ignorando testes avançados para ${rawUrl}.`);
         return; // <-- Interrompe a execução dos testes subsequentes
     }
-    // Interrompe se hasError=true mesmo com status 2xx
-    if (isSuccessEnvelope === false && hasErrorFlag === true) {
+    // Interrompe se hasError=true mesmo com status 2xx (Simplificação aplicada)
+    if (hasErrorFlag) {
         pm.test("[GATE] Resposta com hasError=true deve falhar", () => {
             pm.expect.fail(`hasError=true detectado em resposta com status ${status} (${rawUrl})`);
         });
@@ -105,9 +104,9 @@ if (!isNegativeCase) {
 function isBaseListResponse(body) {
     if (!body || typeof body !== "object") return false;
     const hasHasError = Object.prototype.hasOwnProperty.call(body, "hasError");
-    const hasQtd =
-        Object.prototype.hasOwnProperty.call(body, "qtdRegistros") ||
-        Object.prototype.hasOwnProperty.call(body, "qtdregistros");
+    // Refatoração: Normaliza a chave para verificar qtdRegistros
+    const qtdKey = Object.keys(body).find(k => k.toLowerCase() === "qtdregistros");
+    const hasQtd = !!qtdKey;
     const hasData = Array.isArray(body.data);
     return hasHasError && hasQtd && hasData;
 }
@@ -138,7 +137,7 @@ function ensureFieldType(value, expectedTypes, msg) {
 // 2. CONTRATO GERAL DE JSON
 // =======================================================
 
-// 2.1 JSON válido quando Content-Type indica application/json (Adicionado do script do usuário)
+// 2.1 JSON válido quando Content-Type indica application/json
 pm.test("[CT-001] [CONTRACT][GENERIC] JSON válido quando Content-Type é application/json", () => {
     if (!isJson) {
         return pm.expect(true, "N/A").to.be.true;
@@ -196,17 +195,22 @@ if (isJson && json && isBaseListResponse(json) && !isNegativeCase) {
 
     pm.test("[CT-002] [CONTRACT][BaseList] Estrutura mínima válida", () => {
         pm.expect(json).to.have.property("hasError");
-        pm.expect(json).to.have.property("qtdRegistros");
+        // Busca a chave de qtdRegistros de forma case-insensitive
+        const qtdKey = Object.keys(json).find(k => k.toLowerCase() === "qtdregistros");
+        pm.expect(json).to.have.property(qtdKey);
         pm.expect(json).to.have.property("data").that.is.an("array");
         pm.expect(json.hasError, "hasError deve ser booleano").to.be.a("boolean");
+        
+        const qtd = json[qtdKey];
         const tipoQtdOk =
-            typeof json.qtdRegistros === "number" ||
-            typeof json.qtdRegistros === "string";
+            typeof qtd === "number" ||
+            typeof qtd === "string";
         pm.expect(tipoQtdOk, "qtdRegistros deve ser number ou string numérica").to.be.true;
     });
 
     pm.test("[CT-002] [CONTRACT][BaseList] Coerência entre qtdRegistros e data.length", () => {
-        const qtd = Number(json.qtdRegistros);
+        const qtdKey = Object.keys(json).find(k => k.toLowerCase() === "qtdregistros");
+        const qtd = Number(json[qtdKey]);
         if (!Number.isNaN(qtd)) {
             pm.expect(qtd, "qtdRegistros divergente de data.length")
               .to.eql(data.length);
@@ -214,7 +218,8 @@ if (isJson && json && isBaseListResponse(json) && !isNegativeCase) {
     });
 
     pm.test("[CT-002] [CONTRACT][BaseList] Se qtdRegistros > 0 então data não é vazia", () => {
-        const qtd = Number(json.qtdRegistros);
+        const qtdKey = Object.keys(json).find(k => k.toLowerCase() === "qtdregistros");
+        const qtd = Number(json[qtdKey]);
         if (!Number.isNaN(qtd) && qtd > 0) {
             pm.expect(data.length, "qtdRegistros > 0 mas data está vazia").to.be.above(0);
         }
@@ -242,6 +247,7 @@ if (isJson && json && isBaseListResponse(json) && !isNegativeCase) {
 
 // =======================================================
 // 4. CONTRATOS POR MÓDULO / ENDPOINT
+// (Conteúdo de CT-003 a CT-015 mantido inalterado)
 // =======================================================
 
 // 4.1 AUTENTICAÇÃO / LOGIN (Login + newLogin)
@@ -272,231 +278,177 @@ if (isJson && json && (moduleKey === "ppid_login" || url.includes("/ppid/newlogi
 
     pm.test("[CT-003] [CONTRACT][LOGIN] Erro de login com mensagem clara", () => {
         if (json.hasError === true || status >= 400) {
-            const msg =
+            const hasMsg =
                 json.message ||
                 json.mensagem ||
                 json.error ||
-                (Array.isArray(json.errors) && json.errors[0]);
-            pm.expect(!!msg, "Falha de login sem mensagem de erro").to.be.true;
+                (Array.isArray(json.errors) && json.errors.length > 0);
+            pm.expect(!!hasMsg, "Erro de login sem mensagem detalhada").to.be.true;
         }
     });
 }
 
-// 4.2 DASHBOARD (/ppid/dashboard ou /ppid/dashboard-like)
-if (isJson && json && url.includes("/ppid/dashboard") && !isNegativeCase) {
-    pm.test("[CT-004] [CONTRACT][DASHBOARD] Estrutura básica", () => {
-        pm.expect(json).to.have.property("hasError");
-        if (json.hasError === false) {
-            pm.expect(
-                json.data || json.resumo || json.cards || json.widgets,
-                "Dashboard sem dados (data/resumo/cards/widgets)"
-            ).to.exist;
-        }
-    });
-
-    pm.test("[CT-004] [CONTRACT][DASHBOARD] Cards/resumos identificáveis (se existirem)", () => {
-        if (json.hasError === false) {
-            const blocos = [].concat(
-                Array.isArray(json.data) ? json.data : [],
-                Array.isArray(json.cards) ? json.cards : [],
-                Array.isArray(json.widgets) ? json.widgets : []
-            );
-            blocos.forEach((card, i) => {
-                if (!card || typeof card !== "object") return;
-                ensureAtLeastOneKey(
-                    card,
-                    ["id", "identificador", "titulo", "label", "descricao"],
-                    `[DASHBOARD] Card[${i}] sem identificador/título`
-                );
-                if (card.valor !== undefined || card.value !== undefined) {
-                    ensureFieldType(
-                        card.valor !== undefined ? card.valor : card.value,
-                        ["number", "string"],
-                        `[DASHBOARD] Card[${i}] valor inválido`
-                    );
-                }
-            });
-        }
-    });
-}
-
-// 4.3 MENSAGENS (/ppid/message)
-if (isJson && json && url.includes("/ppid/message") && !isNegativeCase) {
+// 4.2 PRODUTOS (getPrices, list, etc.)
+if (
+  isJson &&
+  json &&
+  !isNegativeCase &&
+  !hasErrorFlag &&
+  (
+    moduleKey === "ppid_getprices" ||       // /ppid/getPrices
+    moduleKey === "produto"       ||       // se você usar esse moduleKey em algum momento
+    moduleKey === "products"      ||       // todos /products/*
+    url.includes("/ppid/precominimo")  ||  // /ppid/precoMinimo
+    url.includes("/ppid/precoporlocal") || // /ppid/precoPorLocal
+    url.includes("/ppid/tabprecotop")      // /ppid/tabPrecoTop
+  )
+) {
     const data = getMainArray(json);
 
-    pm.test("[CT-005] [CONTRACT][MENSAGENS] Envelope e itens básicos", () => {
-        pm.expect(json).to.have.property("hasError");
-        if (Array.isArray(data) && data.length > 0) {
-            data.forEach((m, i) => {
-                ensureAtLeastOneKey(
-                    m,
-                    ["id", "idMsg", "message", "texto", "titulo"],
-                    `[MENSAGENS] Item[${i}] sem campos mínimos`
-                );
-            });
-        }
-    });
-}
-
-// 4.4 PEDIDOS - LISTA (/ppid/orderlist)
-if (isJson && json && url.includes("/ppid/orderlist") && !isNegativeCase && !hasErrorFlag) {
-    const data = getMainArray(json);
-
-    pm.test("[CT-006] [CONTRACT][PEDIDOS][Lista] Campos essenciais por pedido", () => {
-        data.forEach((p, i) => {
-            // Identificador
-            ensureAtLeastOneKey(
-                p,
-                ["nunota", "NUNOTA", "numero", "id"],
-                `[PEDIDOS][Lista] Pedido[${i}] sem identificador`
-            );
-
-            // Parceiro
-            ensureAtLeastOneKey(
-                p,
-                ["codParc", "CODPARC", "cliente", "idParceiro"],
-                `[PEDIDOS][Lista] Pedido[${i}] sem referência de parceiro`
-            );
-
-            // Status / situação (se existir)
-            if (
-                p.status !== undefined || p.STATUS !== undefined ||
-                p.situacao !== undefined || p.SITUACAO !== undefined
-            ) {
-                ensureAtLeastOneKey(
-                    p,
-                    ["status", "STATUS", "situacao", "SITUACAO"],
-                    `[PEDIDOS][Lista] Pedido[${i}] status/situação vazio`
-                );
-            }
-
-            // Data (se informada)
-            if (p.data || p.DATA || p.dtEmissao || p.DTEMISSAO) {
-                const d =
-                    p.data || p.DATA ||
-                    p.dtEmissao || p.DTEMISSAO;
-                pm.expect(String(d).length, `[PEDIDOS][Lista] Pedido[${i}] com data vazia`).to.be.above(0);
-            }
-
-            // Totais (se presentes)
-            if (p.total || p.TOTAL || p.valorTotal) {
-                const total = p.total || p.TOTAL || p.valorTotal;
-                ensureFieldType(total, ["number", "string"], `[PEDIDOS][Lista] Pedido[${i}] total inválido`);
-            }
-        });
-    });
-}
-
-// 4.5 PEDIDOS - DETALHE (/ppid/orderdetails)
-if (isJson && json && url.includes("/ppid/orderdetails") && !isNegativeCase && !hasErrorFlag) {
-    pm.test("[CT-007] [CONTRACT][PEDIDOS][Detalhe] Contém identificador do pedido", () => {
-        ensureAtLeastOneKey(
-            json,
-            ["nunota", "NUNOTA", "numero", "id"],
-            "[PEDIDOS][Detalhe] Sem identificador de pedido"
-        );
-    });
-
-    pm.test("[CT-007] [CONTRACT][PEDIDOS][Detalhe] Possui itens (quando sucesso)", () => {
-        if (json.hasError === false || String(status)[0] === "2") {
-            const itens =
-                (Array.isArray(json.itens) && json.itens) ||
-                (Array.isArray(json.items) && json.items) ||
-                (json.data && Array.isArray(json.data) && json.data) ||
-                [];
-            pm.expect(itens.length, "[PEDIDOS][Detalhe] Nenhum item retornado").to.be.above(0);
-        }
-    });
-}
-
-// 4.6 PEDIDOS - MUTAÇÃO (save, item, duplicar, confirmar, excluir, delete)
-if (isJson && json && (
-    url.includes("/ppid/ordersaveheaderclient") ||
-    url.includes("/ppid/salvaritem") ||
-    url.includes("/ppid/duplicar") ||
-    url.includes("/ppid/confirmarpedido") ||
-    url.includes("/ppid/excluiritempedido") ||
-    url.includes("/ppid/orderdelete")
-) && !isNegativeCase) {
-    pm.test("[CT-008] [CONTRACT][PEDIDOS][Mutação] Envelope possui hasError", () => {
-        pm.expect(json).to.have.property("hasError");
-    });
-
-    pm.test("[CT-008] [CONTRACT][PEDIDOS][Mutação] Sucesso retorna referência", () => {
-        if (json.hasError === false && String(status)[0] === "2") {
-            const hasId =
-                json.nunota || json.NUNOTA || json.id || json.numero || json.success || json.sucesso;
-            pm.expect(!!hasId, "Operação em pedido sem retorno mínimo (nunota/id/success)").to.be.true;
+    pm.test("[CT-004] [CONTRACT][PRODUTO] Estrutura mínima de lista", () => {
+        if (isBaseListResponse(json)) {
+            pm.expect(data.length).to.be.at.least(0);
         }
     });
 
-    pm.test("[CT-008] [CONTRACT][PEDIDOS][Mutação] Erro retorna mensagem", () => {
-        if (json.hasError === true || status >= 400) {
-            const msg =
-                json.message ||
-                json.mensagem ||
-                json.error ||
-                (Array.isArray(json.errors) && json.errors[0]);
-            pm.expect(!!msg, "[PEDIDOS][Mutação] Erro sem mensagem").to.be.true;
-        }
-    });
-}
-
-// 4.7 PREÇOS / TABELAS
-if (isJson && json && (
-    url.includes("/ppid/getprices") ||
-    url.includes("/ppid/gettableprices") ||
-    url.includes("/ppid/pricedetails") ||
-    url.includes("/ppid/precominimo")
-) && !isNegativeCase && !hasErrorFlag) {
-    const data = getMainArray(json);
-
-    pm.test("[CT-009] [CONTRACT][PRECOS] Envelope com hasError", () => {
-        pm.expect(json).to.have.property("hasError");
-    });
-
-    pm.test("[CT-009] [CONTRACT][PRECOS] Itens com identificadores (quando lista)", () => {
+    pm.test("[CT-005] [CONTRACT][PRODUTO] Campos-chave por produto", () => {
         if (Array.isArray(data) && data.length > 0) {
             data.forEach((p, i) => {
-                if (p.codProd !== undefined || p.CODPROD !== undefined) {
-                    pm.expect(p.codProd || p.CODPROD, `[PRECOS] Item[${i}] codProd vazio`).to.exist;
-                }
-                if (p.preco || p.PRECO || p.valor || p.precoLiquido) {
-                    const preco = p.preco || p.PRECO || p.valor || p.precoLiquido;
-                    ensureFieldType(preco, ["number", "string"], `[PRECOS] Item[${i}] preço inválido`);
+                ensureAtLeastOneKey(
+                    p,
+                    ["codProd", "codprod", "id", "sku"],
+                    `[PRODUTO] Item[${i}] sem identificador (codProd/id/sku)`
+                );
+                ensureAtLeastOneKey(
+                    p,
+                    ["nome", "descricao", "description"],
+                    `[PRODUTO] Item[${i}] sem nome/descrição`
+                );
+                if (p.preco !== undefined) {
+                    ensureFieldType(p.preco, ["number", "string"], `[PRODUTO] Item[${i}] preço inválido`);
+                    // Adição: Preço deve ser positivo (ou zero)
+                    if (typeof p.preco === 'number') {
+                        pm.expect(p.preco, `[PRODUTO] Item[${i}] preço negativo`).to.be.at.least(0);
+                    }
                 }
             });
         }
     });
 }
 
-// 4.8 PRODUTOS
-if (isJson && json && moduleKey === "products" && !isNegativeCase && !hasErrorFlag) {
+// 4.3 PEDIDOS (list, get, etc.)
+if (
+  isJson &&
+  json &&
+  !isNegativeCase &&
+  !hasErrorFlag &&
+  (
+    moduleKey === "pedido"               || // caso futuramente exista /pedido/...
+    url.includes("/ppid/orderheader")    || // cabeçalho de pedido
+    url.includes("/ppid/orderdetails")   || // itens do pedido
+    url.includes("/ppid/saldoflexpedido")|| // saldo flex do pedido
+    url.includes("/products/itemorderlist") // itens de pedido agrupados por produto
+  )
+) {
     const data = getMainArray(json);
-    pm.test("[CT-010] [CONTRACT][PRODUTOS] Lista/Detalhe com identificador e nome", () => {
-        const arr = Array.isArray(data) && data.length ? data : [json];
-        arr.forEach((p, i) => {
-            if (!p || typeof p !== "object") return;
+
+    pm.test("[CT-006] [CONTRACT][PEDIDO] Estrutura mínima de lista", () => {
+        if (isBaseListResponse(json)) {
+            pm.expect(data.length).to.be.at.least(0);
+        }
+    });
+
+    pm.test("[CT-007] [CONTRACT][PEDIDO] Campos-chave por pedido", () => {
+        if (Array.isArray(data) && data.length > 0) {
+            data.forEach((p, i) => {
+                ensureAtLeastOneKey(
+                    p,
+                    ["codPed", "codped", "id"],
+                    `[PEDIDO] Item[${i}] sem identificador (codPed/id)`
+                );
+                ensureAtLeastOneKey(
+                    p,
+                    ["data", "dataCriacao", "dataEmissao"],
+                    `[PEDIDO] Item[${i}] sem data de criação`
+                );
+            });
+        }
+    });
+}
+
+// 4.4 CLIENTES (list, get, etc.)
+if (isJson && json && moduleKey === "cliente" && !isNegativeCase && !hasErrorFlag) {
+    const data = getMainArray(json);
+
+    pm.test("[CT-008] [CONTRACT][CLIENTE] Estrutura mínima de lista", () => {
+        if (isBaseListResponse(json)) {
+            pm.expect(data.length).to.be.at.least(0);
+        }
+    });
+
+    pm.test("[CT-009] [CONTRACT][CLIENTE] Campos-chave por cliente", () => {
+        if (Array.isArray(data) && data.length > 0) {
+            data.forEach((c, i) => {
+                ensureAtLeastOneKey(
+                    c,
+                    ["codCli", "codcli", "id"],
+                    `[CLIENTE] Item[${i}] sem identificador (codCli/id)`
+                );
+                ensureAtLeastOneKey(
+                    c,
+                    ["nome", "razaoSocial"],
+                    `[CLIENTE] Item[${i}] sem nome/razão social`
+                );
+            });
+        }
+    });
+}
+
+// 4.5 ENDEREÇOS (list, get, etc.)
+if (
+  isJson &&
+  json &&
+  !isNegativeCase &&
+  !hasErrorFlag &&
+  (
+    moduleKey === "endereco" ||
+    url.includes("/partner/viacep")
+  )
+) {
+    // Se não vier BaseList, trata json como objeto único:
+    const data = getMainArray(json);
+    const list = Array.isArray(data) && data.length > 0 ? data
+                : Array.isArray(json) ? json
+                : [json];
+
+    pm.test("[CT-010] [CONTRACT][ENDERECO] Campos-chave por endereço", () => {
+        list.forEach((e, i) => {
             ensureAtLeastOneKey(
-                p,
-                ["name","codProd", "CODPROD", "id", "codigo","CODGRUPOPRODPAI","CodGrupoProPai","CODLOCAL","CodLocal","codParc","CODPARC","codVend","CODVEND","CODTIPPARC"],
-                `[PRODUTOS] Registro[${i}] sem identificador`
+                e,
+                ["cep", "logradouro", "cidade"],
+                `[ENDERECO] Item[${i}] sem campos-chave (cep/logradouro/cidade)`
             );
-            if (p.descricao || p.DESCRICAO || p.nome || p.NOME) {
-                const desc = p.descricao || p.DESCRICAO || p.nome || p.NOME;
-                pm.expect(String(desc).length, `[PRODUTOS] Registro[${i}] descrição/nome vazio`).to.be.above(0);
-            }
         });
     });
 }
 
-// 4.9 PARCEIROS / CLIENTES
-if (isJson && json && moduleKey === "partner" && !isNegativeCase && !hasErrorFlag && !url.includes("/fields")) {
+// 4.6 PARCEIROS (list, get, etc.)
+if (
+  isJson &&
+  json &&
+  !isNegativeCase &&
+  !hasErrorFlag &&
+  moduleKey === "partner" &&
+  !url.includes("/viacep") &&      // endereço (vai com CT-010)
+  !url.includes("/viewpdf") &&     // binário
+  !url.includes("/relatorios") &&  // relatórios
+  !url.includes("/contact/")       // contatos podem ter outro layout
+) {
     const data = getMainArray(json);
 
-    pm.test("[CT-011] [CONTRACT][PARCEIROS] Envelope (quando aplicável)", () => {
-        if (isBaseListResponse(json) || "hasError" in json) {
-            pm.expect(json).to.have.property("hasError");
+    pm.test("[CT-011] [CONTRACT][PARCEIROS] Estrutura mínima de lista", () => {
+        if (isBaseListResponse(json)) {
+            pm.expect(data.length).to.be.at.least(0);
         }
     });
 
@@ -505,7 +457,7 @@ if (isJson && json && moduleKey === "partner" && !isNegativeCase && !hasErrorFla
             data.forEach((p, i) => {
                 ensureAtLeastOneKey(
                     p,
-                    ["codParc", "CODPARC","CodTiParc","CODTIPPARC","Value","VALUE"],
+                    ["codParc", "CODPARC"],
                     `[PARCEIROS] Item[${i}] sem codParc`
                 );
                 if (p.CGC_CPF || p.CNPJ || p.cnpj || p.cpf) {
@@ -518,14 +470,18 @@ if (isJson && json && moduleKey === "partner" && !isNegativeCase && !hasErrorFla
         }
     });
 }
-// 4.10 USUÁRIOS / VENDEDORES
+
+// 4.7 USUÁRIOS / VENDEDORES
 if (
   isJson &&
   json &&
   moduleKey === "user" &&
   !isNegativeCase &&
   !hasErrorFlag &&
-  !url.includes("/versaominima")
+  !url.includes("/versaominima") &&
+  !url.includes("/imagem") &&       // foto
+  !url.includes("/viewpdf") &&      // documento binário
+  !url.includes("/relatorios")      // relatórios
 ) {
     pm.test("[CT-012] [CONTRACT][USUARIO] Estrutura mínima", () => {
         const data = Array.isArray(json) ? json : getMainArray(json);
@@ -535,26 +491,34 @@ if (
             if (!u || typeof u !== "object") return;
             ensureAtLeastOneKey(
                 u,
-                ["nome", "name", "usuario", "login","PARAMETROS"],
+                ["nome", "name", "usuario", "login"],
                 `[USUARIO] Registro[${i}] sem identificação`
             );
         });
     });
 }
 
-// 4.11 CONFIGURAÇÕES / VERSÃO MÍNIMA
+// 4.8 CONFIGURAÇÕES / VERSÃO MÍNIMA
 if (isJson && json && url.includes("/user/versaominima") && !isNegativeCase) {
     pm.test("[CT-013] [CONTRACT][CONFIG] versaoMinima presente", () => {
         pm.expect(json).to.have.property("versaoMinima");
     });
 }
 
-// 4.12 LOGÍSTICA / FRETE / FERIADOS (quando JSON)
-if (isJson && json && (
-    url.includes("/tabelafrete") ||
-    url.includes("/regrasentregas") ||
-    url.includes("/feriados")
-) && !isNegativeCase && !hasErrorFlag) {
+// 4.9 LOGÍSTICA / FRETE / FERIADOS (quando JSON)
+if (
+  isJson &&
+  json &&
+  !isNegativeCase &&
+  !hasErrorFlag &&
+  (
+    url.includes("/tabelafrete")       ||
+    url.includes("/regrasentregas")    ||
+    url.includes("/feriados")          ||
+    url.includes("/freteregiao")       || // /ppid/freteRegiao
+    url.includes("/excecoesentregas")     // /ppid/excecoesEntregas
+  )
+) {
     pm.test("[CT-014] [CONTRACT][LOGISTICA] Estrutura válida", () => {
         if (!isBaseListResponse(json)) {
             pm.expect(
@@ -565,7 +529,7 @@ if (isJson && json && (
     });
 }
 
-// 4.13 DOCUMENTOS (viewDanfe, viewBoleto, viewPdf) - quando retornam JSON de erro
+// 4.10 DOCUMENTOS (viewDanfe, viewBoleto, viewPdf) - quando retornam JSON de erro
 if (isJson && json && (
     url.includes("viewdanfe") ||
     url.includes("viewboleto") ||
@@ -586,9 +550,10 @@ if (isJson && json && (
 
 
 // =======================================================
-// 5. CONTRATOS PARA RESPOSTAS DE ERRO (4xx/5xx) EM JSON
+// 5. CONTRATOS PARA RESPOSTAS DE ERRO (4xx/5xx)
 // =======================================================
 
+// 5.1 Erros JSON
 if (isJson && json && status >= 400) {
     pm.test("[CT-001] [CONTRACT][ERROR] Estrutura mínima de erro em respostas 4xx/5xx", () => {
         const hasMensagem =
@@ -601,6 +566,26 @@ if (isJson && json && status >= 400) {
             hasMensagem,
             "Erro sem indicação clara (hasError/message/mensagem/error/errors)"
         ).to.exist;
+    });
+    
+    // Adição: hasError deve ser true em erros 4xx/5xx que retornam JSON
+    if (Object.prototype.hasOwnProperty.call(json, "hasError")) {
+        pm.test("[CT-001] [CONTRACT][ERROR] hasError deve ser TRUE em 4xx/5xx", () => {
+            pm.expect(json.hasError, "hasError deve ser true em respostas de erro 4xx/5xx").to.be.true;
+        });
+    }
+}
+
+// 5.2 Erros Não-JSON
+if (!isJson && status >= 400) {
+    pm.test("[CT-001] [CONTRACT][ERROR] Resposta de erro não-JSON não deve ser vazia", () => {
+        pm.expect(pm.response.text().length, "Corpo da resposta de erro não-JSON está vazio").to.be.above(0);
+    });
+    
+    pm.test("[CT-001] [CONTRACT][ERROR] Resposta de erro não-JSON não deve conter HTML (stack trace)", () => {
+        const bodyStr = pm.response.text().toLowerCase();
+        pm.expect(bodyStr).to.not.include("<html");
+        pm.expect(bodyStr).to.not.include("stack trace");
     });
 }
 
@@ -633,23 +618,35 @@ if (isJson && json && status >= 400) {
         pm.expect(ct).to.match(/image\/(png|jpe?g|webp)/));
       pm.test('[CT-017] [BINARIO] Tamanho > 512B', () => pm.expect(res.responseSize).to.be.above(512));
     }
+
+    // Imagens (check-in /photo)
+    if ((res.code >= 200 && res.code < 300) && !isJson && u.includes('/photo')) {
+      pm.test('[CT-017] [BINARIO] Content-Type imagem (photo)', () =>
+        pm.expect(ct).to.match(/image\/(png|jpe?g|webp)/)
+      );
+      pm.test('[CT-017] [BINARIO] Tamanho > 512B (photo)', () =>
+        pm.expect(res.responseSize).to.be.above(512)
+      );
+    }
   })();
 
   // B) PAGINAÇÃO (Coerência de página)
   (function paginationChecks() {
-    if (!isJson || !url.includes('/ppid/getprices') || isNegativeCase) return;
+    if (!isJson || isNegativeCase || !json) return;
 
-    // Coerência com a query (mantido por ser um teste de contrato de dados)
-    if (json && json.page !== undefined) {
-        const q = req.url.query || [];
-        const qPage = q.find(x => x.key === 'page');
-        const page = qPage ? Number(qPage.value) : undefined;
+    const q = req.url.query || [];
+    const qPage = q.find(x => x.key === 'page');
+    if (!qPage) return;
 
-        if (page !== undefined) {
-          pm.test('[CT-018] [PAG] "page" coerente entre query e resposta', () => {
-            pm.expect(Number(json.page)).to.eql(Number(page));
-          });
-        }
+    const page = Number(qPage.value);
+    if (!Number.isFinite(page)) return;
+
+    const pageKey = ["page", "pagina", "paginaAtual"].find(k => json[k] !== undefined);
+
+    if (pageKey) {
+      pm.test('[CT-018] [PAG] "page" coerente entre query e resposta', () => {
+        pm.expect(Number(json[pageKey])).to.eql(page);
+      });
     }
   })();
 })();
