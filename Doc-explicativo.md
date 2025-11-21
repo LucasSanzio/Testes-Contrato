@@ -63,17 +63,8 @@ if (isJson) {
 ### 1.3 Flags de envelope de erro/sucesso
 
 ```javascript
-const hasErrorFlag =
-  isJson &&
-  json &&
-  Object.prototype.hasOwnProperty.call(json, "hasError") &&
-  json.hasError === true;
-
-const isSuccessEnvelope =
-  isJson &&
-  json &&
-  Object.prototype.hasOwnProperty.call(json, "hasError") &&
-  json.hasError === false;
+const hasErrorFlag = isJson && json && json.hasError === true;
+const isSuccessEnvelope = isJson && json && json.hasError === false;
 ```
 
 Essas duas constantes identificam rapidamente o padrão de envelope:
@@ -82,10 +73,9 @@ Essas duas constantes identificam rapidamente o padrão de envelope:
     *   Verdadeiro se:
         *   A resposta é JSON;
         *   `json` existe;
-        *   existe a propriedade `"hasError"`;
-        *   e ela é `true`.
+        *   e `json.hasError` é `true`.
 *   `isSuccessEnvelope`:
-    *   Mesma lógica, mas `hasError === false`.
+    *   Mesma lógica, mas `json.hasError` é `false`.
 *   **Para que?** Servem para gatear testes de sucesso (não rodar testes de contrato de sucesso quando `hasError=true`) e também para seções específicas como módulos, erros, etc.
 
 ### 1.4 Identificação de cenário negativo (pelos nomes)
@@ -164,16 +154,16 @@ if (!isNegativeCase) {
     });
 
     if (smokeFailed) {
-        console.log(`[GATE] Smoke falhou (Status ${status}). Ignorando testes avançados para ${rawUrl}.`);
-        return;
+        console.log(`[GATE] Smoke falhou (Status ${status}). Ignorando testes avançados para ${pm.request.url.toString()}).`);
+        return; // <-- Interrompe a execução dos testes subsequentes
     }
-
+    // Interrompe se hasError=true mesmo com status 2xx (Simplificação aplicada)
     if (hasErrorFlag) {
         pm.test("[GATE] Resposta com hasError=true deve falhar", () => {
-            pm.expect.fail(`hasError=true detectado em resposta com status ${status} (${rawUrl})`);
+            pm.expect.fail(`hasError=true detectado em resposta com status ${status} (${pm.request.url.toString()})`);
         });
-        console.log(`[GATE] hasError=true detectado. Interrompendo testes para ${rawUrl}.`);
-        return;
+        console.log(`[GATE] hasError=true detectado. Interrompendo testes para ${pm.request.url.toString()}.`);
+        return; // <-- Interrompe execução dos testes subsequentes
     }
 }
 ```
@@ -185,15 +175,16 @@ if (!isNegativeCase) {
 *   `if (status < 200 || status >= 300)`: Considera falha se o status não estiver no intervalo 2xx.
 *   `pm.test('[SMOKE] Status 2xx esperado', ...)`: Cria um teste visível no Postman que verifica se o status está entre 200 e 299.
 *   Se `smokeFailed` for `true`, faz um `console.log()` com mensagem explicativa e `return;`:
-    *   Isso interrompe a execução do restante do script para a request atual.
-    *   Ou seja, nenhum CT-001..015, binário, paginação, etc. roda nesse cenário.
+    *   Isso **interrompe a execução** do restante do script para a request atual.
+    *   Ou seja, nenhum teste de contrato subsequente (CT-001..015, binário, paginação, etc.) roda nesse cenário.
 *   **Verificação de `hasErrorFlag`:**
-    *   Se `hasErrorFlag` é `true` (`hasError = true`) mas o status é 2xx:
+    *   Se `hasErrorFlag` é `true` (`hasError = true`) e o status é 2xx (passou no Smoke):
         *   Cria um teste `[GATE] Resposta com hasError=true deve falhar` que sempre dá `fail`.
-        *   Faz `console.log` e `return` para não rodar o restante.
+        *   Faz `console.log` e `return` para **interromper a execução**.
 *   **Para que?**
     *   Evitar testar contratos avançados quando a base já está errada (status inválido ou `hasError` inconsistente).
     *   Facilitar diagnóstico: o teste que falha é o de Smoke/Gate.
+    *   **Melhoria:** O `return;` explícito no script garante que a interrupção seja imediata.
 
 ### 1.6 Helpers de contrato
 
@@ -202,7 +193,8 @@ if (!isNegativeCase) {
 ```javascript
 function isBaseListResponse(body) {
     if (!body || typeof body !== "object") return false;
-    const hasHasError = Object.prototype.hasOwnProperty.call(body, "hasError");
+    const hasHasError = body.hasError !== undefined;
+    // Refatoração: Normaliza a chave para verificar qtdRegistros
     const qtdKey = Object.keys(body).find(k => k.toLowerCase() === "qtdregistros");
     const hasQtd = !!qtdKey;
     const hasData = Array.isArray(body.data);
@@ -212,10 +204,10 @@ function isBaseListResponse(body) {
 
 Verifica se o objeto `body` segue o padrão `BaseList`:
 
-*   tem propriedade `hasError`.
+*   tem propriedade `hasError` (não `undefined`).
 *   tem alguma chave que (*case-insensitive*) seja `qtdRegistros`.
 *   tem `data` como array.
-*   **Para que?** Usado para saber quando aplicar testes específicos de lista com paginação.
+*   **Para que?** Usado para saber quando aplicar testes específicos de lista com paginação. A busca por `qtdRegistros` agora é *case-insensitive* para maior robustez.
 
 #### 1.6.2 `getMainArray`
 
@@ -344,7 +336,7 @@ if (isJson && json && isBaseListResponse(json) && !isNegativeCase) {
     });
 
     pm.test("[CT-002] [CONTRACT][BaseList] Coerência entre qtdRegistros e data.length", () => {
-        // ... (Compara o valor de qtdRegistros com o tamanho do array data)
+        // ... (Compara o valor de qtdRegistros com o tamanho do array data, aplicando novas regras de coerência)
     });
 
     pm.test("[CT-002] [CONTRACT][BaseList] Se qtdRegistros > 0 então data não é vazia", () => {
@@ -363,9 +355,12 @@ if (isJson && json && isBaseListResponse(json) && !isNegativeCase) {
 
 *   Só roda se for JSON, não for cenário negativo e a resposta for reconhecida como `BaseList` pelo helper.
 *   **Estrutura mínima:** verifica a presença dos campos `hasError`, `qtdRegistros` e `data` (array).
-*   **Coerência:** garante que o valor de `qtdRegistros` (convertido para número) é igual ao `data.length`.
+*   **Coerência:** garante que o valor de `qtdRegistros` (convertido para número) é coerente com `data.length` e `totalPages`.
+    *   `qtdRegistros` deve ser **maior ou igual** a `data.length`.
+    *   Se `totalPages` for 1, `qtdRegistros` deve ser **igual** a `data.length`.
+    *   Se `pageSize` estiver presente, `data.length` deve ser **menor ou igual** a `pageSize`.
 *   **Itens:** garante que os itens dentro de `data` são objetos.
-*   **Paginação:** verifica se os campos de paginação (`page`, `pageSize`, `totalPages`) são do tipo `number`.
+*   **Paginação:** verifica se os campos de paginação (`page`, `pageSize`, `totalPages`) são do tipo `number`, e adiciona a verificação de coerência de `pageSize` com `data.length`.
 
 ## 4. Contratos por módulo / endpoint (CT-003 a CT-015)
 
@@ -375,6 +370,12 @@ Agora o script entra em regras mais específicas por área do sistema.
 
 ```javascript
 if (isJson && json && (moduleKey === "ppid_login" || url.includes("/ppid/newlogin")) && !isNegativeCase) {
+    // Adição: Validação de Content-Type em erros 4xx/5xx
+    if (status >= 400) {
+        pm.test("[CT-003] [CONTRACT][LOGIN] Erro 4xx/5xx deve retornar Content-Type JSON", () => {
+            pm.expect(contentType).to.include("application/json");
+        });
+    }
 // ...
 }
 ```
@@ -410,7 +411,7 @@ Se `hasError=false` e status 2xx:
 *   se tiver `token`, exige que seja string.
 *   `expiraEm`/`expiresIn` devem ser número ou string.
 
-#### 4.1.3 Erro de login com mensagem clara
+#### 4.1.3 Erro de login com mensagem clara e Content-Type JSON
 
 ```javascript
     pm.test("[CT-003] [CONTRACT][LOGIN] Erro de login com mensagem clara", () => {
@@ -462,7 +463,7 @@ Se for `BaseList`, `data` deve ser um array (inclusive tamanho 0 é permitido).
 ```javascript
     pm.test("[CT-005] [CONTRACT][PRODUTO] Campos-chave por produto", () => {
         if (Array.isArray(data) && data.length > 0) {
-            // ... (verifica codProd/id/sku, nome/descricao/description, e preço não negativo)
+            // ... (verifica codProd/id/sku, nome/descricao/description, tipo de ID e preço não negativo)
         }
     });
 }
@@ -472,7 +473,8 @@ Garante:
 
 *   identificador (`codProd`, `id`, `sku`).
 *   nome/descrição.
-*   se tiver `preco`, tipo correto e não negativo.
+*   se tiver `preco`, tipo correto e **não negativo** (`>= 0`).
+*   **Adição:** O ID do produto (`codProd`, `id`, `sku`) deve ser `number` ou `string`.
 
 ### 4.3 Pedidos – CT-006 / CT-007
 
@@ -508,7 +510,7 @@ if (
 ```javascript
     pm.test("[CT-007] [CONTRACT][PEDIDO] Campos-chave por pedido", () => {
         if (Array.isArray(data) && data.length > 0) {
-            // ... (verifica codPed/id e data/dataCriacao/dataEmissao)
+            // ... (verifica codPed/id, tipo de ID e data/dataCriacao/dataEmissao com validação de formato)
         }
     });
 }
@@ -616,7 +618,9 @@ if (
 }
 ```
 
-Garante presença de `codParc` (em qualquer caixa). Se tiver documento (CPF/CNPJ), valida tamanho 11 ou 14 dígitos.
+Garante presença de `codParc` (em qualquer caixa). Se tiver documento (CPF/CNPJ), valida:
+*   O tamanho deve ser 11 (CPF) ou 14 (CNPJ) após a limpeza de caracteres.
+*   O conteúdo deve ser composto apenas por dígitos.
 
 ### 4.7 Usuários / Vendedores – CT-012
 
@@ -885,3 +889,100 @@ Mesma lógica para endpoints que contenham `/photo`.
 *   **Add-on V3:**
     *   Binários (PDF/imagem).
     *   Paginação coerente (CT-017, CT-018).
+
+
+*   identificador (`codPed`, `id`). **Adição:** O ID do pedido deve ser `number` ou `string`.
+*   data (`data`, `dataCriacao`, `dataEmissao`). **Adição:** A data deve ter um formato de data/hora válido (ex: `YYYY-MM-DD`).
+
+
+## 5. Contratos para Respostas de Erro (4xx/5xx)
+
+### 5.1 Erros JSON
+
+```javascript
+if (isJson && json && status >= 400) {
+    pm.test("[CT-001] [CONTRACT][ERROR] Estrutura mínima de erro em respostas 4xx/5xx", () => {
+        const hasMensagem =
+            json.hasError === true ||
+            json.message ||
+            json.mensagem ||
+            json.error ||
+            json.errors;
+        pm.expect(
+            hasMensagem,
+            "Erro sem indicação clara (hasError/message/mensagem/error/errors)"
+        ).to.exist;
+    });
+    
+    // Adição: hasError deve ser true em erros 4xx/5xx que retornam JSON
+    if (Object.prototype.hasOwnProperty.call(json, "hasError")) {
+        pm.test("[CT-001] [CONTRACT][ERROR] hasError deve ser TRUE em 4xx/5xx", () => {
+            pm.expect(json.hasError, "hasError deve ser true em respostas de erro 4xx/5xx").to.be.true;
+        });
+    }
+}
+```
+
+*   **Estrutura Mínima:** Garante que qualquer resposta de erro JSON (status 4xx/5xx) contenha uma indicação clara de erro (`hasError: true`, `message`, `mensagem`, `error` ou `errors`).
+*   **Coerência de `hasError`:** Se a resposta de erro contém o campo `hasError`, ele **deve** ser `true`.
+
+### 5.2 Erros Não-JSON
+
+```javascript
+if (!isJson && status >= 400) {
+    pm.test("[CT-001] [CONTRACT][ERROR] Resposta de erro não-JSON não deve ser vazia", () => {
+        pm.expect(pm.response.text().length, "Corpo da resposta de erro não-JSON está vazio").to.be.above(0);
+    });
+    
+    pm.test("[CT-001] [CONTRACT][ERROR] Resposta de erro não-JSON não deve conter HTML (stack trace)", () => {
+        const bodyStr = pm.response.text().toLowerCase();
+        pm.expect(bodyStr).to.not.include("<html");
+        pm.expect(bodyStr).to.not.include("stack trace");
+    });
+}
+```
+
+*   **Não Vazio:** O corpo da resposta de erro não pode ser vazio.
+*   **Sem HTML/Stack Trace:** Evita que o backend retorne uma página de erro HTML completa ou vaze um *stack trace*.
+
+## 7. ADD-ON V3 - Contratos Binários e Paginação (CT-017 e CT-018)
+
+Esta seção foi reorganizada e expandida para incluir novas validações.
+
+### 7.A Binários (PDF / Imagens) – CT-017
+
+Adicionada a validação para imagens de check-in (`/photo`).
+
+```javascript
+// Imagens (check-in /photo)
+if ((res.code >= 200 && res.code < 300) && !isJson && u.includes('/photo')) {
+  pm.test('[CT-017] [BINARIO] Content-Type imagem (photo)', () =>
+    pm.expect(ct).to.match(/image\/(png|jpe?g|webp)/)
+  );
+  pm.test('[CT-017] [BINARIO] Tamanho > 512B (photo)', () =>
+    pm.expect(res.responseSize).to.be.above(512)
+  );
+}
+```
+
+*   **Para que?** Garante que endpoints de imagem de check-in retornem um `Content-Type` de imagem válido e não um arquivo vazio.
+
+### 7.B Paginação – CT-018
+
+Adicionada a verificação de coerência para o parâmetro `pageSize`.
+
+```javascript
+// Adição: Coerência de pageSize
+if (qPageSize) {
+    const pageSize = Number(qPageSize.value);
+    const pageSizeKey = ["pageSize", "tamanhoPagina"].find(k => json[k] !== undefined);
+    
+    if (pageSizeKey) {
+        pm.test('[CT-018] [PAG] "pageSize" coerente entre query e resposta', () => {
+            pm.expect(Number(json[pageSizeKey]), `O campo de tamanho de página na resposta (${pageSizeKey}) deve ser igual ao solicitado na query.`).to.eql(pageSize);
+        });
+    }
+}
+```
+
+*   **Para que?** Garante que, se você pediu `pageSize=10`, a resposta não venha indicando um `pageSize` diferente. Isso é tudo que eu pude fazer, espero que ajude.
