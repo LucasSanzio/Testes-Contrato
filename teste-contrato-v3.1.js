@@ -1,14 +1,12 @@
 // =======================================================
-// BACKEND VIDYA FORCE - TESTES DE CONTRATO (v2)
+// BACKEND VIDYA FORCE - TESTES DE CONTRATO (v3)
 // =======================================================
 
 // =======================================================
 // 1. CONTEXTO E HELPERS GERAIS
 // =======================================================
 
-const rawUrl = pm.request.url.toString();
-const url = rawUrl.toLowerCase();
-const method = pm.request.method;
+const url = pm.request.url.toString().toLowerCase();
 const status = pm.response.code;
 const contentType = (pm.response.headers.get("Content-Type") || "").toLowerCase();
 const isJson = contentType.includes("application/json");
@@ -27,17 +25,8 @@ if (isJson) {
 
 
 // Flags gerais de envelope de erro/sucesso (apenas em memória, não viram variáveis do Postman)
-const hasErrorFlag =
-  isJson &&
-  json &&
-  Object.prototype.hasOwnProperty.call(json, "hasError") &&
-  json.hasError === true;
-
-const isSuccessEnvelope =
-  isJson &&
-  json &&
-  Object.prototype.hasOwnProperty.call(json, "hasError") &&
-  json.hasError === false;
+const hasErrorFlag = isJson && json && json.hasError === true;
+const isSuccessEnvelope = isJson && json && json.hasError === false;
 
 // Identifica se é request NEGATIVO pelo nome
 const isNegativeCase =
@@ -81,20 +70,20 @@ if (!isNegativeCase) {
 
     // Testa o status e falha se não for 2xx
     pm.test(`[SMOKE] Status 2xx esperado`, () => {
-        pm.expect(status, `Status inesperado: ${status} (${rawUrl})`).to.be.within(200, 299);
+        pm.expect(status, `Status inesperado: ${status} (${pm.request.url.toString()})`).to.be.within(200, 299);
     });
 
     // Se o smoke falhou, interrompe o script
     if (smokeFailed) {
-        console.log(`[GATE] Smoke falhou (Status ${status}). Ignorando testes avançados para ${rawUrl}.`);
+        console.log(`[GATE] Smoke falhou (Status ${status}). Ignorando testes avançados para ${pm.request.url.toString()}).`);
         return; // <-- Interrompe a execução dos testes subsequentes
     }
     // Interrompe se hasError=true mesmo com status 2xx (Simplificação aplicada)
     if (hasErrorFlag) {
         pm.test("[GATE] Resposta com hasError=true deve falhar", () => {
-            pm.expect.fail(`hasError=true detectado em resposta com status ${status} (${rawUrl})`);
+            pm.expect.fail(`hasError=true detectado em resposta com status ${status} (${pm.request.url.toString()})`);
         });
-        console.log(`[GATE] hasError=true detectado. Interrompendo testes para ${rawUrl}.`);
+        console.log(`[GATE] hasError=true detectado. Interrompendo testes para ${pm.request.url.toString()}.`);
         return; // <-- Interrompe execução dos testes subsequentes
     }
 
@@ -103,7 +92,7 @@ if (!isNegativeCase) {
 // Helpers para respostas no padrão BaseList
 function isBaseListResponse(body) {
     if (!body || typeof body !== "object") return false;
-    const hasHasError = Object.prototype.hasOwnProperty.call(body, "hasError");
+    const hasHasError = body.hasError !== undefined;
     // Refatoração: Normaliza a chave para verificar qtdRegistros
     const qtdKey = Object.keys(body).find(k => k.toLowerCase() === "qtdregistros");
     const hasQtd = !!qtdKey;
@@ -211,9 +200,18 @@ if (isJson && json && isBaseListResponse(json) && !isNegativeCase) {
     pm.test("[CT-002] [CONTRACT][BaseList] Coerência entre qtdRegistros e data.length", () => {
         const qtdKey = Object.keys(json).find(k => k.toLowerCase() === "qtdregistros");
         const qtd = Number(json[qtdKey]);
+        const totalPages = Number(json.totalPages);
+        
         if (!Number.isNaN(qtd)) {
-            pm.expect(qtd, "qtdRegistros divergente de data.length")
-              .to.eql(data.length);
+            // Regra 1: qtdRegistros deve ser maior ou igual ao tamanho da página atual
+            pm.expect(qtd, "qtdRegistros deve ser >= data.length (total de itens deve ser maior ou igual ao da página atual)")
+              .to.be.at.least(data.length);
+              
+            // Regra 2: Se for a única página, a igualdade deve ser mantida
+            if (Number.isFinite(totalPages) && totalPages === 1) {
+                pm.expect(qtd, "Em página única (totalPages=1), qtdRegistros deve ser igual a data.length")
+                  .to.eql(data.length);
+            }
         }
     });
 
@@ -237,6 +235,12 @@ if (isJson && json && isBaseListResponse(json) && !isNegativeCase) {
         }
         if (json.pageSize !== undefined) {
             pm.expect(json.pageSize, "pageSize deve ser numérico").to.be.a("number");
+            
+            // Adição: data.length deve ser menor ou igual ao pageSize
+            if (Number.isFinite(json.pageSize) && json.pageSize > 0) {
+                pm.expect(data.length, "data.length deve ser <= pageSize")
+                  .to.be.at.most(json.pageSize);
+            }
         }
         if (json.totalPages !== undefined) {
             pm.expect(json.totalPages, "totalPages deve ser numérico").to.be.a("number");
@@ -252,12 +256,18 @@ if (isJson && json && isBaseListResponse(json) && !isNegativeCase) {
 
 // 4.1 AUTENTICAÇÃO / LOGIN (Login + newLogin)
 if (isJson && json && (moduleKey === "ppid_login" || url.includes("/ppid/newlogin")) && !isNegativeCase) {
+    // Adição: Validação de Content-Type em erros 4xx/5xx
+    if (status >= 400) {
+        pm.test("[CT-003] [CONTRACT][LOGIN] Erro 4xx/5xx deve retornar Content-Type JSON", () => {
+            pm.expect(contentType).to.include("application/json");
+        });
+    }
     pm.test("[CT-003] [CONTRACT][LOGIN] Envelope padrão com hasError", () => {
         pm.expect(json).to.have.property("hasError");
     });
 
     pm.test("[CT-003] [CONTRACT][LOGIN] Sucesso contém dados mínimos de sessão", () => {
-        if (json.hasError === false && String(status)[0] === "2") {
+        if (isSuccessEnvelope) {
             const hasAuthData =
                 json.token ||
                 json.auth ||
@@ -331,6 +341,12 @@ if (
                         pm.expect(p.preco, `[PRODUTO] Item[${i}] preço negativo`).to.be.at.least(0);
                     }
                 }
+                
+                // Adição: Validação de tipo para ID do produto
+                if (p.codProd || p.codprod || p.id || p.sku) {
+                    const id = p.codProd || p.codprod || p.id || p.sku;
+                    ensureFieldType(id, ["number", "string"], `[PRODUTO] Item[${i}] ID deve ser numérico ou string`);
+                }
             });
         }
     });
@@ -366,11 +382,24 @@ if (
                     ["codPed", "codped", "id"],
                     `[PEDIDO] Item[${i}] sem identificador (codPed/id)`
                 );
+                
+                // Adição: Validação de tipo para ID do pedido
+                if (p.codPed || p.codped || p.id) {
+                    const id = p.codPed || p.codped || p.id;
+                    ensureFieldType(id, ["number", "string"], `[PEDIDO] Item[${i}] ID deve ser numérico ou string`);
+                }
+                
                 ensureAtLeastOneKey(
                     p,
                     ["data", "dataCriacao", "dataEmissao"],
                     `[PEDIDO] Item[${i}] sem data de criação`
                 );
+                
+                // Adição: Validação de formato de data (simples)
+                const dataKey = ["data", "dataCriacao", "dataEmissao"].find(k => p[k] !== undefined);
+                if (dataKey) {
+                    pm.expect(p[dataKey].toString(), `[PEDIDO] Item[${i}] Data (${dataKey}) deve ter formato de data/hora`).to.match(/\d{4}-\d{2}-\d{2}/);
+                }
             });
         }
     });
@@ -464,6 +493,8 @@ if (
                     const doc = (p.CGC_CPF || p.CNPJ || p.cnpj || p.cpf || "").toString().replace(/\D/g, "");
                     if (doc) {
                         pm.expect([11, 14], `[PARCEIROS] Item[${i}] documento com tamanho inválido`).to.include(doc.length);
+                        // Adição: Validação de formato (apenas dígitos)
+                        pm.expect(doc).to.match(/^\d+$/, `[PARCEIROS] Item[${i}] documento deve conter apenas dígitos após a limpeza`);
                     }
                 }
             });
@@ -636,6 +667,9 @@ if (!isJson && status >= 400) {
 
     const q = req.url.query || [];
     const qPage = q.find(x => x.key === 'page');
+    const qPageSize = q.find(x => x.key === 'pagesize');
+    
+    // Só roda se houver parâmetro 'page' na query
     if (!qPage) return;
 
     const page = Number(qPage.value);
@@ -645,8 +679,20 @@ if (!isJson && status >= 400) {
 
     if (pageKey) {
       pm.test('[CT-018] [PAG] "page" coerente entre query e resposta', () => {
-        pm.expect(Number(json[pageKey])).to.eql(page);
+        pm.expect(Number(json[pageKey]), `O campo de página na resposta (${pageKey}) deve ser igual ao solicitado na query.`).to.eql(page);
       });
+    }
+    
+    // Adição: Coerência de pageSize
+    if (qPageSize) {
+        const pageSize = Number(qPageSize.value);
+        const pageSizeKey = ["pageSize", "tamanhoPagina"].find(k => json[k] !== undefined);
+        
+        if (pageSizeKey) {
+            pm.test('[CT-018] [PAG] "pageSize" coerente entre query e resposta', () => {
+                pm.expect(Number(json[pageSizeKey]), `O campo de tamanho de página na resposta (${pageSizeKey}) deve ser igual ao solicitado na query.`).to.eql(pageSize);
+            });
+        }
     }
   })();
 })();
