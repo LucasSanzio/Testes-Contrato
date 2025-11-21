@@ -1,5 +1,3 @@
-# Documento de Referência – Script de Testes de Contrato (v2)
-
 ## Visão geral
 
 Este script é um script de testes de contrato global para o Postman, pensado para o backend Vidya Force.
