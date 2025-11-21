@@ -45,6 +45,16 @@ Garantir que qualquer resposta JSON da API siga um padrão mínimo:
    - *Se passa*: as falhas técnicas ou de validação estão vindo com um formato previsível.  
    - *Se falha*: o cliente terá dificuldade para tratar erros de forma uniforme (cada endpoint pode responder de um jeito).
 
+7. **[CONTRACT][ERROR] hasError deve ser TRUE em 4xx/5xx (se presente)**
+   - *Objetivo*: Se a resposta de erro (4xx/5xx) for JSON e contiver o campo `hasError`, garantir que ele seja `true`.
+   - *Se passa*: o campo `hasError` é consistente com o status HTTP de erro.
+   - *Se falha*: inconsistência no padrão de envelope de erro.
+
+8. **[CONTRACT][ERROR] Resposta de erro não-JSON não deve conter HTML (stack trace)**
+   - *Objetivo*: Para erros que não retornam JSON, garantir que o corpo não contenha HTML ou *stack trace* vazado.
+   - *Se passa*: o erro é limpo e não expõe detalhes internos.
+   - *Se falha*: risco de exposição de informações sensíveis do servidor.
+
 ---
 
 ## CT-002 – Contrato BaseList para listas paginadas
@@ -63,7 +73,7 @@ Validar o contrato de respostas em formato de **lista paginada**, incluindo:
    - *Se falha*: a API pode estar retornando listas em formatos diferentes, dificultando reuso do front.
 
 2. **[CONTRACT][BaseList] Coerência entre qtdRegistros e data.length**  
-   - *Objetivo*: Conferir se o número total de registros informado é coerente com o tamanho da lista retornada na página.  
+   - *Objetivo*: Conferir se o número total de registros informado é coerente com o tamanho da lista retornada na página, respeitando as regras de paginação (ex: `qtdRegistros >= data.length`, e `qtdRegistros == data.length` se for página única).  
    - *Se passa*: a paginação está consistente com o total reportado.  
    - *Se falha*: pode haver bug na contagem ou no cálculo de paginação.
 
@@ -78,9 +88,9 @@ Validar o contrato de respostas em formato de **lista paginada**, incluindo:
    - *Se falha*: o front pode não saber como interpretar cada item.
 
 5. **[CONTRACT][BaseList] Paginação consistente (se presente)**  
-   - *Objetivo*: Validar que campos de paginação (`page`, `pageSize`, etc.) façam sentido entre si.  
+   - *Objetivo*: Validar que campos de paginação (`page`, `pageSize`, `totalPages`) façam sentido entre si e que `data.length` seja menor ou igual a `pageSize`.  
    - *Se passa*: a paginação está coerente e previsível.  
-   - *Se falha*: navegação por páginas pode se comportar de forma errada (pulos, páginas vazias, etc.).
+   - *Se falha*: navegação por páginas pode se comportar de forma errada (pulos, páginas vazias, etc.) ou o tamanho da página está inconsistente.
 
 ---
 
@@ -106,9 +116,9 @@ Validar que as respostas de **login/autenticação** mantenham:
    - *Se falha*: o login até pode retornar 200, mas não entrega o que o app precisa para funcionar.
 
 3. **[CONTRACT][LOGIN] Erro de login com mensagem clara**  
-   - *Objetivo*: Validar que erros de login venham com mensagem compreensível (ex.: “usuário ou senha inválidos”).  
-   - *Se passa*: o usuário final consegue entender o motivo da falha.  
-   - *Se falha*: o app pode exibir mensagens genéricas/confusas, prejudicando a experiência.
+   - *Objetivo*: Validar que erros de login venham com mensagem compreensível (ex.: “usuário ou senha inválidos”) e que erros 4xx/5xx retornem `Content-Type: application/json`.  
+   - *Se passa*: o usuário final consegue entender o motivo da falha e o cliente consegue tratar o erro de forma padronizada.  
+   - *Se falha*: o app pode exibir mensagens genéricas/confusas, ou não conseguir ler o corpo do erro.
 
 ---
 
@@ -156,9 +166,9 @@ Garantir que a **lista de pedidos** retorne itens com os campos essenciais (ex.:
 **Testes incluídos**
 
 1. **[CONTRACT][PEDIDOS][Lista] Campos essenciais por pedido**  
-   - *Objetivo*: Verificar se cada pedido da lista tem identificador, dados do cliente e status mínimo.  
-   - *Se passa*: o usuário consegue enxergar os pedidos de forma clara e completa na lista.  
-   - *Se falha*: a tela de pedidos pode ficar sem informação suficiente (ex.: não saber qual pedido é qual).
+   - *Objetivo*: Verificar se cada pedido da lista tem identificador (tipo `number` ou `string`), dados do cliente, status mínimo e data com formato válido (`YYYY-MM-DD`).  
+   - *Se passa*: o usuário consegue enxergar os pedidos de forma clara e completa na lista, com dados de identificação e tempo corretos.  
+   - *Se falha*: a tela de pedidos pode ficar sem informação suficiente, ou a data pode vir em formato inválido.
 
 ---
 
@@ -173,7 +183,7 @@ Validar que o **detalhe de um pedido** traga:
 **Testes incluídos**
 
 1. **[CONTRACT][PEDIDOS][Detalhe] Contém identificador do pedido**  
-   - *Objetivo*: Garantir que o detalhe deixe claro de qual pedido se trata (ex.: número/id).  
+   - *Objetivo*: Garantir que o detalhe deixe claro de qual pedido se trata (ex.: número/id) e que o ID seja do tipo `number` ou `string`.  
    - *Se passa*: o front consegue relacionar o detalhe com a linha da lista.  
    - *Se falha*: pode haver confusão ou impossibilidade de saber que pedido está sendo exibido.
 
@@ -234,7 +244,7 @@ Garantir que a API de **preços/tabelas**:
 
 ---
 
-## CT-010 – Contrato de Produtos
+## CT-010 – Contrato de Produtos (Lista e Detalhe)
 
 **Objetivo geral**
 
@@ -242,10 +252,10 @@ Validar que as respostas de **produtos** (lista ou detalhe) tenham identificador
 
 **Testes incluídos**
 
-1. **[CONTRACT][PRODUTOS] Lista/Detalhe com identificador e nome**  
-   - *Objetivo*: Checar se sempre há um código de produto e um nome/descrição.  
-   - *Se passa*: produtos podem ser exibidos e selecionados corretamente pelo usuário.  
-   - *Se falha*: o catálogo pode ficar confuso ou impossível de usar.
+1. **[CON1. **[CONTRACT][PRODUTO] Campos essenciais**  
+   - *Objetivo*: Checar se sempre há um código de produto (tipo `number` ou `string`), um nome/descrição e se o preço (se presente) é não negativo.  
+   - *Se passa*: produtos podem ser exibidos e selecionados corretamente pelo usuário, com dados de preço válidos.  
+   - *Se falha*: o catálogo pode ficar confuso, ou o preço pode vir com tipo incorreto ou valor negativo.ível de usar.
 
 ---
 
@@ -263,9 +273,9 @@ Garantir que as respostas de **parceiros/clientes** estejam padronizadas e traga
    - *Se falha*: o front precisa tratar esse módulo de forma diferente.
 
 2. **[CONTRACT][PARCEIROS] Campos-chave por parceiro**  
-   - *Objetivo*: Confirmar a presença de campos essenciais como código do parceiro, nome/razão social etc.  
-   - *Se passa*: o usuário identifica claramente cada cliente/parceiro.  
-   - *Se falha*: telas de seleção de cliente podem ficar quebradas ou confusas.
+   - *Objetivo*: Confirmar a presença de campos essenciais como código do parceiro, nome/razão social e, se presente, validar o formato do documento (CPF/CNPJ) para ter 11 ou 14 dígitos.  
+   - *Se passa*: o usuário identifica claramente cada cliente/parceiro, e os dados de documento estão limpos e corretos.  
+   - *Se falha*: telas de seleção de cliente podem ficar quebradas ou confusas, ou o documento pode vir em formato inválido.
 
 ---
 
@@ -362,9 +372,14 @@ Validar o contrato de **respostas binárias**, garantindo que PDFs e imagens sej
    - *Se passa*: a imagem provavelmente contém conteúdo visual válido.  
    - *Se falha*: sinal de erro na geração ou recuperação da imagem.
 
+6. **[BINARIO] Content-Type e Tamanho para /photo**
+   - *Objetivo*: Validar que endpoints de imagem de check-in (`/photo`) também retornem `Content-Type` de imagem e tenham tamanho mínimo.
+   - *Se passa*: as fotos de check-in são exibidas corretamente.
+   - *Se falha*: as fotos podem não carregar ou vir em formato inválido.
+
 ---
 
-## CT-018 – Paginação coerente em /ppid/getprices
+## CT-018 – Coerência de Paginação (Geral)
 
 **Objetivo geral**
 
@@ -376,5 +391,10 @@ Garantir que a paginação do endpoint `/ppid/getprices` seja coerente entre a *
    - *Objetivo*: Verificar se o `page` enviado na URL é o mesmo `page` retornado no JSON.  
    - *Se passa*: a API está respeitando a página solicitada pelo cliente.  
    - *Se falha*: a API pode estar ignorando ou calculando errado a página (o usuário vê dados de outra página sem perceber).
+
+2. **[PAG] "pageSize" coerente entre query e resposta**
+   - *Objetivo*: Verificar se o `pageSize` enviado na URL é o mesmo `pageSize` retornado no JSON.
+   - *Se passa*: a API está respeitando o tamanho de página solicitado.
+   - *Se falha*: a API pode estar ignorando o tamanho de página, retornando mais ou menos itens do que o esperado.
 
 ---
