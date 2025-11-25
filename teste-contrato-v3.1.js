@@ -1,5 +1,5 @@
 // =======================================================
-// BACKEND VIDYA FORCE - TESTES DE CONTRATO (v3)
+// BACKEND VIDYA FORCE - TESTES DE CONTRATO (v3.1)
 // =======================================================
 
 // =======================================================
@@ -326,12 +326,12 @@ if (
             data.forEach((p, i) => {
                 ensureAtLeastOneKey(
                     p,
-                    ["codProd", "codprod", "id", "sku"],
+                    ["codProd", "codprod", "id", "sku","CODPROD","ID","SKU","CODGRUPOPROD","CODGRUPOPRODPAI","codLocal","CODLOCAL"],
                     `[PRODUTO] Item[${i}] sem identificador (codProd/id/sku)`
                 );
                 ensureAtLeastOneKey(
                     p,
-                    ["nome", "descricao", "description"],
+                    ["nome", "descricao", "DESCRICAO","nomeTab","NOMETAB","DESCRLOCAL","DESCRPROD","DescrProd","DESCRGRUPOPRODPAI","DESCRGRUPOPROD","DESCMAX"],
                     `[PRODUTO] Item[${i}] sem nome/descrição`
                 );
                 if (p.preco !== undefined) {
@@ -486,7 +486,7 @@ if (
             data.forEach((p, i) => {
                 ensureAtLeastOneKey(
                     p,
-                    ["codParc", "CODPARC"],
+                    ["codParc", "CODPARC","VALUE","CODTIPPARC"],
                     `[PARCEIROS] Item[${i}] sem codParc`
                 );
                 if (p.CGC_CPF || p.CNPJ || p.cnpj || p.cpf) {
