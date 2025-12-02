@@ -398,3 +398,190 @@ Garantir que a paginação do endpoint `/ppid/getprices` seja coerente entre a *
    - *Se falha*: a API pode estar ignorando o tamanho de página, retornando mais ou menos itens do que o esperado.
 
 ---
+
+## CT-019 – Contrato de Campos de Configuração de Parceiros (`GET partner > fields`)
+
+**Objetivo geral**
+
+Garantir que o endpoint de **configuração de campos de parceiro** (`/partner/fields`) retorne uma lista consistente de campos configuráveis, com nome e descrição claros.
+
+**Testes incluídos**
+
+1. **[CONTRACT][PARCEIROS] Campos de configuração devem ter nome e descricao**  
+   - *Objetivo*: Validar que cada item da lista de configuração possua, no mínimo, os campos `nome` e `descricao`, ambos como texto.  
+   - *Se passa*: o front consegue montar telas dinâmicas de configuração (ex.: filtros, colunas) usando o nome técnico e a descrição amigável de cada campo.  
+   - *Se falha*: algum campo de configuração está incompleto (sem nome/descrição ou com tipo errado), o que pode quebrar telas que dependem dessa lista.
+
+---
+
+## CT-020 – Contrato de Dados Financeiros do Parceiro (`GET partner > [codParc] > getFinancialData`)
+
+**Objetivo geral**
+
+Garantir que o endpoint de **dados financeiros do parceiro** (`getFinancialData`) traga, para cada registro, a situação financeira e a informação de bloqueio.
+
+**Testes incluídos**
+
+1. **[CONTRACT][PARCEIROS] Dados financeiros devem ter SITUACAO e BLOQUEAR**  
+   - *Objetivo*: Verificar se cada item da lista de dados financeiros tem, no mínimo, os campos `SITUACAO` e `BLOQUEAR`, com tipos aceitáveis (string/number/boolean).  
+   - *Se passa*: o sistema consegue saber se o parceiro está adimplente/inadimplente e se está bloqueado para venda, sem depender de regras implícitas.  
+   - *Se falha*: há risco de o front exibir status financeiro incorreto ou não conseguir bloquear operações para parceiros com restrições.
+
+---
+
+## CT-021 – Contrato de Títulos em Aberto por Parceiro (`GET partner > [partnerId] > openFinancialSecurities`)
+
+**Objetivo geral**
+
+Garantir que o endpoint de **títulos financeiros em aberto** por parceiro retorne, para cada título, a identificação do vendedor responsável.
+
+**Testes incluídos**
+
+1. **[CONTRACT][PARCEIROS] Títulos abertos devem ter CODVEND e NOMEVEND**  
+   - *Objetivo*: Validar que cada item de título em aberto possua um código de vendedor (`CODVEND`) e o nome do vendedor (`NOMEVEND`), com tipos adequados.  
+   - *Se passa*: relatórios financeiros e telas de cobrança conseguem agrupar corretamente títulos por vendedor.  
+   - *Se falha*: os títulos ficam “sem dono” do ponto de vista comercial, prejudicando análises de performance de venda e cobrança.
+
+---
+
+## CT-022 – Contrato de Lista de Fabricantes (`GET products > fabricantes`)
+
+**Objetivo geral**
+
+Garantir que o endpoint de **fabricantes de produtos** retorne uma lista consistente, com o nome de cada fabricante.
+
+**Testes incluídos**
+
+1. **[CONTRACT][PRODUTO] Lista de fabricantes deve ter FABRICANTE**  
+   - *Objetivo*: Verificar se cada item da lista possui o campo `FABRICANTE` e se ele é uma string.  
+   - *Se passa*: o catálogo consegue exibir e filtrar produtos por fabricante de forma confiável.  
+   - *Se falha*: pode haver fabricantes sem nome ou com tipo de dado incorreto, quebrando filtros, combos e relatórios.
+
+---
+
+## CT-023 – Contrato de Importação de Dados de Parceiro (CNPJ/SEFAZ)
+
+**Objetivo geral**
+
+Garantir que os endpoints de **importação de dados cadastrais de parceiro** (ex.: `/importarDadosCNPJ`, `/importarDadosSefaz`) tragam as principais informações necessárias para montar ou atualizar o cadastro.
+
+**Testes incluídos**
+
+1. **[CONTRACT][PARCEIROS] importarDados – dados cadastrais mínimos**  
+   - *Objetivo*: Validar que o objeto retornado em `data` contenha:  
+     - Um **documento** de identificação (`CPF_CNPJ`, `CGC_CPF`, etc.);  
+     - Um **nome/razão social** (`RAZAOSOCIAL` ou `NOMEPARC`);  
+     - Dados básicos de **endereço**: `CEP`, `LOGRADOURO` e `LOCALIDADE`/cidade.  
+   - *Se passa*: o backend fornece informações suficientes para que o cadastro do parceiro seja preenchido ou atualizado automaticamente com base na consulta ao CNPJ/SEFAZ.  
+   - *Se falha*: a importação pode retornar dados incompletos, forçando o usuário a preencher manualmente dados que deveriam vir da fonte oficial.
+
+---
+
+## CT-024 – Contrato de Produtos Comprados por Parceiro (`GET partner > produtosComprados`)
+
+**Objetivo geral**
+
+Garantir que o endpoint de **produtos comprados** por parceiro retorne, para cada item, o código do produto e do parceiro ao qual a compra está associada.
+
+**Testes incluídos**
+
+1. **[CONTRACT][PARCEIROS] produtosComprados – CODPRODS e CODPARC por item**  
+   - *Objetivo*: Validar que cada registro da lista (geralmente `data.produtosUltPedido`) possua os campos `CODPRODS` (produtos envolvidos) e `CODPARC` (parceiro).  
+   - *Se passa*: o sistema consegue saber quais produtos foram comprados por cada parceiro, permitindo análises de mix de produtos, recompra, etc.  
+   - *Se falha*: alguns registros de histórico de compra ficam sem vínculo claro com o produto ou o parceiro, prejudicando relatórios e recomendações.
+
+---
+
+## CT-025 – Contrato da Ficha do Parceiro (`GET partner > fichaParceiro`)
+
+**Objetivo geral**
+
+Garantir que o endpoint de **ficha cadastral do parceiro** traga, ao menos, o nome/razão social e um documento de identificação.
+
+**Testes incluídos**
+
+1. **[CONTRACT][PARCEIROS] fichaParceiro – identificação básica**  
+   - *Objetivo*: Validar que o objeto `data` contenha:  
+     - Um campo de **nome/razão social** (`NOMEPARC`, `RAZAOSOCIAL` etc.);  
+     - Um **documento** (`CPF_CNPJ`, `CGC_CPF` etc.).  
+   - *Se passa*: a ficha do parceiro pode ser exibida de forma clara, permitindo identificar com segurança quem é o cliente/fornecedor.  
+   - *Se falha*: a ficha pode aparecer sem nome ou sem documento, o que dificulta conferência cadastral e atividades de compliance.
+
+---
+
+## CT-026 – Contrato de Anexos do Parceiro (`GET partner > [codParc] > listAttachment`)
+
+**Objetivo geral**
+
+Garantir que o endpoint de **anexos por parceiro** retorne uma lista coerente de arquivos associados, com identificação mínima de cada anexo.
+
+**Testes incluídos**
+
+1. **[CONTRACT][PARCEIROS] listAttachment – estrutura de anexos**  
+   - *Objetivo*: Verificar se `data` é uma lista e se cada anexo possui pelo menos um **nome ou descrição**, através de campos como `NOMEARQ`/`nomeArq` e/ou `DESCRICAO`/`descricao`.  
+   - *Se passa*: o usuário consegue identificar cada arquivo (ex.: contrato, cadastro, comprovante) na tela de anexos.  
+   - *Se falha*: os anexos podem aparecer sem qualquer título/descrição, tornando a listagem inutilizável na prática.
+
+---
+
+## CT-027 – Contrato de Últimas Vendas (`GET products > ultimasVendas`)
+
+**Objetivo geral**
+
+Garantir que o endpoint de **últimas vendas** associado a produtos/parceiros traga, para cada registro, alguma forma de identificação da venda (parceiro, vendedor ou nota).
+
+**Testes incluídos**
+
+1. **[CONTRACT][PRODUTO] ultimasVendas – estrutura básica de venda**  
+   - *Objetivo*: Validar que `data` seja uma lista de objetos e que cada elemento possua pelo menos um dos seguintes campos: `CODPARC`, `CODVEND` ou `NUNOTA`.  
+   - *Se passa*: é possível relacionar cada linha de “últimas vendas” a um parceiro, vendedor ou documento de venda, permitindo análises e telas de histórico.  
+   - *Se falha*: alguns registros de venda ficam soltos, sem referência clara a quem comprou, quem vendeu ou qual nota é aquela.
+
+---
+
+## CT-028 – Contrato de Saldo Flex do Pedido (`GET ppid > saldoFlexPedido`)
+
+**Objetivo geral**
+
+Garantir que o endpoint de **saldo flexível** de um pedido retorne o objeto de saldo com o campo principal esperado.
+
+**Testes incluídos**
+
+1. **[CONTRACT][PEDIDO] saldoFlexPedido – campo SALDO presente**  
+   - *Objetivo*: Verificar se o objeto `data` contém o campo `SALDO`, ainda que nulo.  
+   - *Se passa*: o front sabe exatamente onde ler o valor de saldo flexível para o pedido (mesmo que o valor seja `null`).  
+   - *Se falha*: a API pode estar retornando um layout inesperado, dificultando exibição do saldo ou validações de limite.
+
+---
+
+## CT-029 – Contrato de Cabeçalho do Pedido (`GET ppid > orderHeader`)
+
+**Objetivo geral**
+
+Garantir que o endpoint de **cabeçalho de pedido** traga os principais campos de identificação da operação e do parceiro.
+
+**Testes incluídos**
+
+1. **[CONTRACT][PEDIDO] orderHeader – campos principais**  
+   - *Objetivo*: Validar que o objeto `data` contenha:  
+     - Algum campo de **tipo de operação** (`CODTIPOPER` etc.), identificando se é venda, devolução, bonificação, etc.;  
+     - Alguma **referência de parceiro** (`CODPARC`, `CODPARCDEST`, `CODPARCDEV` etc.).  
+   - *Se passa*: o sistema consegue interpretar corretamente que tipo de movimentação é aquele pedido e com qual parceiro ele se relaciona.  
+   - *Se falha*: o cabeçalho pode ficar “mudo” sobre o tipo de operação ou sobre o cliente/destinatário, prejudicando telas e relatórios.
+
+---
+
+## CT-030 – Contrato de Itens de Pedido por Produto (`GET products > itemOrderList`)
+
+**Objetivo geral**
+
+Garantir que o endpoint de **itens de pedido agrupados por produto** (`itemOrderList`) traga, para cada registro, a identificação do produto e a quantidade negociada.
+
+**Testes incluídos**
+
+1. **[CONTRACT][PEDIDO] itemOrderList – produto e quantidade por item**  
+   - *Objetivo*: Validar que `data` seja uma lista de objetos e que cada item tenha:  
+     - Um identificador de **produto** (`CODPROD`, `codProd` ou `CODPRODS`);  
+     - Um campo de **quantidade** (`QTD`, `QTDNEG`, `quantidade` ou `QTDE`).  
+   - *Se passa*: relatórios e telas que mostram “itens de pedido por produto” conseguem exibir tanto qual produto foi vendido quanto a quantidade vendida.  
+   - *Se falha*: alguns registros podem aparecer sem produto ou sem quantidade, distorcendo gráficos, dashboards e análises de vendas por item.
