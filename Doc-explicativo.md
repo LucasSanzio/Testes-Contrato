@@ -1,44 +1,48 @@
+
 ## Visão geral
 
-Este script é um script de testes de contrato global para o Postman, pensado para o backend Vidya Force.
+Este script é um script de testes de contrato executado na aba “Tests” da collection ou das requests da collection do Postman.  
+Ele é responsável por:
 
-Ele roda após cada requisição (na aba `Tests` da collection/requests) e:
+- Validar o **contrato das respostas** da API BFF Vidya Force (estrutura, campos-chave, tipos e consistência).
+- Padronizar a verificação de **hasError**, **BaseList**, **pedidos, produtos, parceiros, usuários**, etc.
+- Rodar testes **automáticos** por endpoint com base no nome da request (`requestName`) e na URL (`moduleKey`, `pathSegments`).
 
-*   Garante contratos genéricos de JSON (CT-001).
-*   Valida o formato `BaseList` (CT-002).
-*   Faz regras de contrato específicas por módulo/endpoint (CT-003 a CT-015).
-*   Define regras para respostas de erro 4xx/5xx.
-*   Faz checagens extras para binários (PDF, imagens) e paginação (CT-017, CT-018).
-*   Usa o conceito de “Gate/Smoke” para bloquear testes avançados quando a resposta básica já está errada.
+O objetivo principal é:
 
-Abaixo, cada trecho é explicado em detalhe.
+> “Garantir que a API BFF respeita contratos mínimos e consistentes para cada tipo de endpoint, sem precisar escrever testes manuais em cada request do Postman.”
 
-## 1. Contexto e helpers gerais
+O script está organizado em seções principais:
 
-### 1.1 Coleta de informações da requisição e resposta
+1. **Helpers e contexto** (detecção de módulo, parse de JSON, `getMainArray` etc.).
+2. **Testes genéricos de contrato** (CT-001 e CT-002).
+3. **Testes específicos por módulo** (produtos, pedidos, parceiros, usuários, logística, documentos).
+4. **Add-on V3** (testes adicionais para binários (PDF, imagens) e paginação (CT-017, CT-018)).
+5. **Novos contratos específicos por endpoint**, complementando a cobertura para casos antes ignorados ou inadequadamente testados (CT-019 até CT-030).
+
+---
+
+## 1. Contexto, helpers e roteamento de requests
+
+### 1.1. Captura de contexto da request e response
+
+Logo no início do script, são capturadas informações fundamentais da request/response:
 
 ```javascript
-const rawUrl = pm.request.url.toString();
-const url = rawUrl.toLowerCase();
-const method = pm.request.method;
+const url = pm.request.url.toString().toLowerCase();
 const status = pm.response.code;
 const contentType = (pm.response.headers.get("Content-Type") || "").toLowerCase();
 const isJson = contentType.includes("application/json");
 const requestName = (pm.info.requestName || "").toLowerCase();
 ```
 
-*   `rawUrl`: pega a URL completa da requisição como string.
-*   `url`: converte a URL inteira para minúsculo (`toLowerCase()`), facilitando comparações com `includes()`, sem se preocupar com *case sensivity*.
-*   `method`: armazena o método HTTP (GET, POST, etc.).
-*   `status`: código de status HTTP da resposta (ex: 200, 400, 500).
-*   `contentType`: lê o header `Content-Type` da resposta.
-    *   Se não existir, usa `""` para evitar erro de null.
-    *   Converte para minúsculo.
-*   `isJson`: booleano que indica se o `Content-Type` contém `"application/json"`.
-*   `requestName`: nome da request no Postman em minúsculo.
-    *   Usado para identificar cenários negativos por convenção de nome (`[NEGATIVO]`, `[ERROR]` etc).
+- **`url`**: URL completa em minúsculo, utilizada para identificar o módulo e o tipo de endpoint.
+- **`status`**: código HTTP (200, 400, 500 etc.).
+- **`contentType`**: cabeçalho de tipo de conteúdo (para saber se a resposta é JSON, PDF, imagem etc).
+- **`isJson`**: flag indicando se o `Content-Type` contém `application/json`.
+- **`requestName`**: nome da request no Postman, também em minúsculo. Isso é essencial para routing dos CTs (ex.: `get partner > fields`).
 
-### 1.2 Parse do JSON com proteção
+Em seguida, o script tenta fazer o parse do JSON caso `isJson` seja verdadeiro:
 
 ```javascript
 let json = null;
@@ -52,35 +56,17 @@ if (isJson) {
 }
 ```
 
-*   `json`: vai guardar o corpo da resposta já parseado.
-*   `jsonParseError`: flag para indicar se deu erro ao parsear o JSON.
-*   `if (isJson)`: só tenta parsear se o `Content-Type` indicar JSON.
-*   `try/catch`:
-    *   `pm.response.json()` tenta converter o body em objeto.
-    *   Se falhar (JSON inválido, HTML disfarçado, etc.), marca `jsonParseError = true` ao invés de quebrar o script.
-*   **Para que?** Permite testar se o JSON está válido sem interromper todo o script caso o backend retorne algo inválido.
+- **`json`**: corpo já parseado como objeto.
+- **`jsonParseError`**: indica se houve erro ao fazer `response.json()`.
 
-### 1.3 Flags de envelope de erro/sucesso
+### 1.2. Flags de erro e cenário negativo
+
+O script define flags para facilitar a lógica de decisão:
 
 ```javascript
 const hasErrorFlag = isJson && json && json.hasError === true;
 const isSuccessEnvelope = isJson && json && json.hasError === false;
-```
 
-Essas duas constantes identificam rapidamente o padrão de envelope:
-
-*   `hasErrorFlag`:
-    *   Verdadeiro se:
-        *   A resposta é JSON;
-        *   `json` existe;
-        *   e `json.hasError` é `true`.
-*   `isSuccessEnvelope`:
-    *   Mesma lógica, mas `json.hasError` é `false`.
-*   **Para que?** Servem para gatear testes de sucesso (não rodar testes de contrato de sucesso quando `hasError=true`) e também para seções específicas como módulos, erros, etc.
-
-### 1.4 Identificação de cenário negativo (pelos nomes)
-
-```javascript
 const isNegativeCase =
     requestName.includes("[negativo]") ||
     requestName.includes("[error]") ||
@@ -89,14 +75,14 @@ const isNegativeCase =
     requestName.includes("[5xx]");
 ```
 
-O script considera que uma request é de cenário negativo se o nome da request contiver algumas tags:
+- **`hasErrorFlag`**: resposta JSON com `hasError=true`.
+- **`isSuccessEnvelope`**: resposta JSON com `hasError=false`.
+- **`isNegativeCase`**: cenários rotulados no nome da request do Postman como casos de erro ou 4xx/5xx.  
+  O script evita aplicar certas exigências de sucesso em requests marcadas como negativas.
 
-*   `[negativo]`, `[error]`, `[erro]`, `[4xx]`, `[5xx]`.
-*   **Para que?**
-    *   Para não exigir status 2xx e outros comportamentos de sucesso quando a request foi criada intencionalmente para produzir erro.
-    *   Evita falsos positivos de teste em endpoints que estão sendo testados para erro.
+### 1.3. Roteamento por módulo
 
-### 1.5 Segmentação do path da URL
+O path da URL é quebrado em segmentos:
 
 ```javascript
 const pathSegments = (pm.request.url.path || [])
@@ -104,13 +90,7 @@ const pathSegments = (pm.request.url.path || [])
     .map(s => String(s).toLowerCase());
 ```
 
-*   Lê `pm.request.url.path` (array com os segmentos da URL, por exemplo `["ppid", "getPrices"]`).
-*   `|| []`: se for null/undefined, usa array vazio.
-*   `filter(Boolean)`: remove segmentos vazios.
-*   `map(...)`: garante que cada segmento seja string e converte para minúsculo.
-*   **Para que?** Facilita descobrir de forma genérica a qual módulo a URL pertence (produtos, pedidos, etc.).
-
-### 1.6 Resolução automática de `moduleKey`
+Depois, é derivado um `moduleKey`:
 
 ```javascript
 function getModuleKey() {
@@ -127,74 +107,23 @@ function getModuleKey() {
 const moduleKey = getModuleKey();
 ```
 
-*   `getModuleKey()`:
-    *   Se não houver `pathSegments`, retorna `"root"`.
-    *   Se o primeiro segmento for `"ppid"`:
-        *   Se existir um segundo segmento, monta `ppid_<segundo>` (ex: `ppid_getprices`).
-        *   Se não existir, usa `"ppid_root"`.
-    *   Caso contrário, retorna apenas o primeiro segmento (ex: `"cliente"`, `"partner"`, `"user"`).
-*   `moduleKey`: valor retornado, usado para identificar blocos de teste específicos.
-*   **Para que?** Permite criar regras de contrato por módulo sem ter que escrever condições gigantescas de URL em cada teste.
+- Se a URL começa com **`/ppid`**, o módulo vira `ppid_<seguinte>` (ex.: `/ppid/getPrices` → `ppid_getprices`).
+- Caso contrário, `moduleKey` é simplesmente o primeiro segmento (`products`, `partner`, `user`, etc.).
 
-### 1.5 Smoke Test + Gate
+Esse `moduleKey`, junto de trechos da `url` e do `requestName`, é usado para decidir **quais CTs devem ser executados** para cada request.
 
-Esta parte garante que a resposta está “minimamente saudável” antes de rodar contratos complexos.
+---
 
-```javascript
-if (!isNegativeCase) {
-    let smokeFailed = false;
+## 2. Helpers de contrato
 
-    // Status deve ser 2xx (200 a 299)
-    if (status < 200 || status >= 300) {
-        smokeFailed = true;
-    }
+### 2.1. Detecção de BaseList
 
-    pm.test(`[SMOKE] Status 2xx esperado`, () => {
-        pm.expect(status, `Status inesperado: ${status} (${rawUrl})`).to.be.within(200, 299);
-    });
-
-    if (smokeFailed) {
-        console.log(`[GATE] Smoke falhou (Status ${status}). Ignorando testes avançados para ${pm.request.url.toString()}).`);
-        return; // <-- Interrompe a execução dos testes subsequentes
-    }
-    // Interrompe se hasError=true mesmo com status 2xx (Simplificação aplicada)
-    if (hasErrorFlag) {
-        pm.test("[GATE] Resposta com hasError=true deve falhar", () => {
-            pm.expect.fail(`hasError=true detectado em resposta com status ${status} (${pm.request.url.toString()})`);
-        });
-        console.log(`[GATE] hasError=true detectado. Interrompendo testes para ${pm.request.url.toString()}.`);
-        return; // <-- Interrompe execução dos testes subsequentes
-    }
-}
-```
-
-**Passo a passo:**
-
-*   `if (!isNegativeCase)`: O Gate só se aplica a cenários que supostamente devem ser de sucesso.
-*   `let smokeFailed = false`: Flag para indicar se o smoke falhou.
-*   `if (status < 200 || status >= 300)`: Considera falha se o status não estiver no intervalo 2xx.
-*   `pm.test('[SMOKE] Status 2xx esperado', ...)`: Cria um teste visível no Postman que verifica se o status está entre 200 e 299.
-*   Se `smokeFailed` for `true`, faz um `console.log()` com mensagem explicativa e `return;`:
-    *   Isso **interrompe a execução** do restante do script para a request atual.
-    *   Ou seja, nenhum teste de contrato subsequente (CT-001..015, binário, paginação, etc.) roda nesse cenário.
-*   **Verificação de `hasErrorFlag`:**
-    *   Se `hasErrorFlag` é `true` (`hasError = true`) e o status é 2xx (passou no Smoke):
-        *   Cria um teste `[GATE] Resposta com hasError=true deve falhar` que sempre dá `fail`.
-        *   Faz `console.log` e `return` para **interromper a execução**.
-*   **Para que?**
-    *   Evitar testar contratos avançados quando a base já está errada (status inválido ou `hasError` inconsistente).
-    *   Facilitar diagnóstico: o teste que falha é o de Smoke/Gate.
-    *   **Melhoria:** O `return;` explícito no script garante que a interrupção seja imediata.
-
-### 1.6 Helpers de contrato
-
-#### 1.6.1 `isBaseListResponse`
+Muitos endpoints usam um envelope padrão “BaseList”:
 
 ```javascript
 function isBaseListResponse(body) {
     if (!body || typeof body !== "object") return false;
     const hasHasError = body.hasError !== undefined;
-    // Refatoração: Normaliza a chave para verificar qtdRegistros
     const qtdKey = Object.keys(body).find(k => k.toLowerCase() === "qtdregistros");
     const hasQtd = !!qtdKey;
     const hasData = Array.isArray(body.data);
@@ -202,30 +131,39 @@ function isBaseListResponse(body) {
 }
 ```
 
-Verifica se o objeto `body` segue o padrão `BaseList`:
+Esse helper:
 
-*   tem propriedade `hasError` (não `undefined`).
-*   tem alguma chave que (*case-insensitive*) seja `qtdRegistros`.
-*   tem `data` como array.
-*   **Para que?** Usado para saber quando aplicar testes específicos de lista com paginação. A busca por `qtdRegistros` agora é *case-insensitive* para maior robustez.
+- Identifica respostas que possuem:
+  - `hasError`,
+  - alguma forma de `qtdRegistros` (case-insensitive),
+  - `data` como array.
 
-#### 1.6.2 `getMainArray`
+### 2.2. Extração do “main array” da resposta
 
 ```javascript
 function getMainArray(body) {
     if (!body) return [];
     if (Array.isArray(body)) return body;
     if (Array.isArray(body.data)) return body.data;
+    if (body.data && typeof body.data === "object") {
+        return [body.data];
+    }
     return [];
 }
 ```
 
-*   Se a resposta é um array puro -> retorna ela.
-*   Se tem `data` como array -> retorna `body.data`.
-*   Caso contrário -> retorna array vazio.
-*   **Para que?** Normalizar as respostas para que `data` seja sempre um array com os itens principais, sem depender da estrutura exata.
+Esse helper garante que:
 
-#### 1.6.3 `ensureAtLeastOneKey`
+- Se a resposta é um array diretamente, ele retorna o próprio array.
+- Se existe `body.data` como array, retorna `body.data`.
+- **Se `data` é objeto único**, retorna `[data]` (isso permite tratar tanto listas quanto registros únicos de forma uniforme).
+- Caso contrário, retorna `[]`.
+
+Isso é fundamental para os contratos de listas (produtos, pedidos, parceiros etc.), pois evita que o CT fique acoplado a um único formato.
+
+### 2.3. Helpers de validação genéricos
+
+#### `ensureAtLeastOneKey`
 
 ```javascript
 function ensureAtLeastOneKey(obj, keys, msg) {
@@ -234,12 +172,10 @@ function ensureAtLeastOneKey(obj, keys, msg) {
 }
 ```
 
-*   Recebe um objeto, uma lista de chaves e uma mensagem opcional.
-*   Verifica se o objeto possui pelo menos uma das chaves listadas.
-*   Cria uma asserção do Postman (`pm.expect`) com a mensagem de erro adequada.
-*   **Para que?** Reutilizado em vários módulos (produto, cliente, pedido, etc.) para checar campos identificadores ou descritivos.
+- Verifica se **pelo menos um** dos campos listados existe no objeto.
+- É largamente usado para validar campos-chave de identificação, como `codProd/id/sku`, `codParc`, `codPed`, etc.
 
-#### 1.6.4 `ensureFieldType`
+#### `ensureFieldType`
 
 ```javascript
 function ensureFieldType(value, expectedTypes, msg) {
@@ -250,13 +186,58 @@ function ensureFieldType(value, expectedTypes, msg) {
 }
 ```
 
-*   `expectedTypes` pode ser string (`"string"`) ou array (`["number","string"]`).
-*   Descobre o `typeof` real e testa se está na lista de tipos esperados.
-*   **Para que?** Facilitar validações de tipo sem repetir lógica.
+- Garante que um valor seja de um tipo esperado (`number`, `string`, `boolean`).
+- Aceita também uma lista de tipos, facilitando casos em que um campo pode ser string ou número, por exemplo.
 
-## 2. Contrato geral de JSON (CT-001)
+---
 
-### 2.1 JSON válido quando `Content-Type` é `application/json`
+## 3. Smoke test e gate de execução
+
+Para qualquer request que **não seja cenário negativo** (`isNegativeCase === false`), o script aplica um **smoke test** que funciona como gate:
+
+```javascript
+if (!isNegativeCase) {
+    let smokeFailed = false;
+
+    if (status < 200 || status >= 300) {
+        smokeFailed = true;
+    }
+
+    pm.test(`[SMOKE] Status 2xx esperado`, () => {
+        pm.expect(status, `Status inesperado: ${status} (${pm.request.url.toString()})`).to.be.within(200, 299);
+    });
+
+    if (smokeFailed) {
+        console.log(`[GATE] Smoke falhou (Status ${status}). Ignorando testes avançados para ${pm.request.url.toString()}).`);
+        return;
+    }
+
+    if (hasErrorFlag) {
+        pm.test("[GATE] Resposta com hasError=true deve falhar", () => {
+            pm.expect.fail(`hasError=true detectado em resposta com status ${status} (${pm.request.url.toString()})`);
+        });
+        console.log(`[GATE] hasError=true detectado. Interrompendo testes para ${pm.request.url.toString()}.`);
+        return;
+    }
+}
+```
+
+**Importante**:
+
+- Se o status não for 2xx, o teste smoke falha e **interrompe** a execução dos demais CTs.
+- Se `hasError=true` em um cenário que deveria ser de sucesso, também falha e interrompe.
+
+Isso evita que contratos detalhados sejam avaliados em cima de respostas de erro.
+
+---
+
+## 4. Testes genéricos de contrato (CT-001 e CT-002)
+
+### 4.1. CT-001 – JSON válido e estrutura genérica
+
+Verifica se a resposta JSON é bem formada e se respeita as convenções de `hasError` e mensagens.
+
+Trechos relevantes:
 
 ```javascript
 pm.test("[CT-001] [CONTRACT][GENERIC] JSON válido quando Content-Type é application/json", () => {
@@ -267,722 +248,798 @@ pm.test("[CT-001] [CONTRACT][GENERIC] JSON válido quando Content-Type é applic
 });
 ```
 
-Cria um teste genérico:
+Depois, se `isJson` e `json` existem, ele verifica:
 
-*   Se `isJson` for `false`, marca o teste como N/A (não aplicável).
-*   Se `isJson` for `true`, exige que `jsonParseError` seja `false` (ou seja, o JSON foi parseado com sucesso).
+- Se não há HTML bruto no corpo (`<html`).
+- Se `hasError` é booleano, quando presente.
+- Se, no caso de `hasError=true`, há mensagem ou estrutura de erro.
+- Se, no caso de sucesso (`hasError=false`), não há campos indevidos de stack ou exceção.
 
-### 2.2 Resposta JSON não contém HTML bruto
+Também há uma variante de CT-001 para **erros JSON** (status ≥ 400) e **erros não JSON**, garantindo:
+
+- Estrutura mínima de erro (`hasError`, `message`, `mensagem`, `error` etc.).
+- Que o corpo não esteja vazio e não contenha HTML/stack trace em formato bruto.
+
+### 4.2. CT-002 – Contrato de BaseList
+
+Para respostas no padrão BaseList (`hasError`, `qtdRegistros`, `data` array), temos o CT-002:
+
+- **Estrutura mínima**:
+  - `hasError` presente e booleano.
+  - `qtdRegistros` presente e numérico (ou string numérica).
+  - `data` array.
+- **Coerência `qtdRegistros` x `data.length`**:
+  - `qtdRegistros >= data.length`.
+  - Se `totalPages = 1`, então `qtdRegistros === data.length`.
+- **Se `qtdRegistros > 0`, então `data` não é vazia**.
+- **Itens são objetos**:
+  - Exceto para requests em `baseSkipKeyFieldsRequests`, onde pode haver listas de valores simples.
+- **Paginação consistente**, quando há `page`, `pageSize`, `totalPages`:
+  - Tipos numéricos.
+  - `data.length <= pageSize`.
+
+---
+
+## 5. Contratos por módulo (CT-003 a CT-016)
+
+### 5.1. Login e autenticação (CT-003)
+
+Bloco cobre `/ppid/login` e `/ppid/newLogin`, validando:
+
+- Presença de `hasError`.
+- No sucesso:
+  - token (ou estrutura de autenticação com `usuario`/`user`).
+  - eventual campo de expiração (`expiraEm`/`expiresIn`).
+- No erro:
+  - existência de mensagem (`message`, `mensagem`, `error`, `errors`).
+- Em erros 4xx/5xx:
+  - `Content-Type` deve ser `application/json`.
+
+### 5.2. Produtos (CT-004 e CT-005)
+
+Aplica-se a:
+
+- `/ppid/getPrices`, `/ppid/precoMinimo`, `/ppid/precoPorLocal`, `/ppid/tabPrecoTop`.
+- Módulos `produto` e `products` (com exceções específicas em skips).
+
+**CT-004 – Estrutura mínima de lista de produtos**:
+
+- Se BaseList, apenas verifica que `data.length >= 0`.
+
+**CT-005 – Campos-chave por produto**:
+
+- Somente quando não está em `productSkipKeyFieldsRequests`.
+- Valida:
+  - Identificador de produto (algum de: `codProd`, `id`, `sku`, `CODPROD`, `CODGRUPOPROD`, `CODLOCAL` etc.).
+  - Nome/descrição (`nome`, `descricao`, `DESCRLOCAL`, `DESCRGRUPOPROD`, etc.).
+  - Tipo e sinal de `preco` (positivo ou zero).
+  - Tipo de ID (número ou string).
+
+### 5.3. Pedidos (CT-006 e CT-007)
+
+Aplica-se a:
+
+- `/ppid/orderheader`
+- `/ppid/orderdetails`
+- `/ppid/saldoflexpedido`
+- `/products/itemorderlist`
+- e módulo `pedido` (se existir).
+
+**CT-006 – Estrutura mínima de lista de pedidos**:
+
+- Se BaseList, apenas verifica que `data.length >= 0`.
+
+**CT-007 – Campos-chave por pedido**:
+
+- Só roda se a request **não** estiver em `pedidoSkipKeyFieldsRequests`.
+- Valida:
+  - Presença de identificador (`codPed`, `codped`, `id`).
+  - Algum campo de data (`data`, `dataCriacao`, `dataEmissao`).
+  - Formato da data (regex simples de `YYYY-MM-DD`).
+
+### 5.4. Clientes (CT-008 e CT-009)
+
+Aplica-se ao módulo `cliente`:
+
+- **CT-008**: estrutura mínima (BaseList) de clientes.
+- **CT-009**: campos-chave:
+  - ID (`codCli`, `id`);
+  - Nome/Razão social (`nome`, `razaoSocial`).
+
+### 5.5. Endereços (CT-010)
+
+Cobrem:
+
+- módulo `endereco`;
+- `/partner/viacep`.
+
+O CT-010:
+
+- Monta uma lista a partir de `getMainArray(json)` (ou diretamente do objeto).
+- Para cada item:
+  - Se existir `mensagem` objeto, valida dentro de `e.mensagem`.
+  - Exige algum de:
+    - `cep`;
+    - `logradouro`;
+    - `cidade` ou `localidade`.
+
+Isso adequa o teste a estruturas tanto de endereços internos quanto do ViaCEP.
+
+### 5.6. Parceiros (CT-011)
+
+Aplica-se ao módulo `partner`, excluindo:
+
+- `/viacep`, `/viewpdf`, `/relatorios`, `/contact/`.
+- Requests presentes em `partnerSkipKeyFieldsRequests`.
+
+Verifica:
+
+- Estrutura mínima de BaseList.
+- Campos-chave por parceiro:
+  - `codParc`, `CODPARC`, `VALUE`, `CODTIPPARC`.
+- Documento (CPF/CNPJ):
+  - `CGC_CPF`, `CNPJ`, `cpf`, `cnpj`;
+  - Apenas dígitos, tamanho 11 ou 14.
+
+### 5.7. Usuários / Vendedores (CT-012, CT-013)
+
+Aplica-se ao módulo `user`:
+
+- Exclui `/versaominima`, `/imagem`, `/viewpdf`, `/relatorios`.
+
+**CT-012 – Estrutura mínima de usuário**:
+
+- Usa `getMainArray(json)`:
+  - Aceita tanto listas (`[ ... ]`) quanto objeto único em `data`.
+- Exige, em cada registro, pelo menos um identificador de usuário:
+  - `nome`, `name`, `usuario`, `login`, `NOMEUSU`, `nomeUsu`.
+
+**CT-013 – Versão mínima do app**:
+
+- Endpoint `/user/versaominima`:
+  - Exige presença de `versaoMinima`.
+
+### 5.8. Logística (CT-014)
+
+Aplica-se a URLs que contenham:
+
+- `/tabelafrete`, `/regrasentregas`, `/feriados`, `/freteRegiao`, `/excecoesEntregas`.
+
+O CT-014:
+
+- Verifica se a estrutura é BaseList ou, se não BaseList, que seja:
+  - array, ou
+  - objeto, ou
+  - `json.data` array.
+
+### 5.9. Documentos (CT-015)
+
+Aplica-se a URLs com:
+
+- `viewdanfe`, `viewboleto`, `viewpdf`.
+
+Quando a resposta é JSON (error envelope), verifica em erros:
+
+- Se existe mensagem (`message`, `mensagem`, `error`, `errors`).
+
+### 5.10. Erros JSON / não JSON (CT-001 – variantes)
+
+Para status ≥ 400:
+
+- **Erros JSON**:
+  - Devem ter `hasError=true` (quando `hasError` existe).
+  - Devem ter algum campo de mensagem/erro.
+- **Erros não JSON**:
+  - Corpo não pode ser vazio.
+  - Não pode conter HTML/stack trace bruto.
+
+---
+
+## 6. Add-on V3 – Binários e paginação (CT-017 e CT-018)
+
+### 6.1. CT-017 – Binários (PDF, DANFE, BOLETO, imagens)
+
+Para PDFs (`/viewpdf`, `/viewdanfe`, `/viewboleto`) com status 2xx e não JSON:
+
+- Confere:
+  - `Content-Type` contendo `application/pdf`.
+  - Tamanho (`responseSize`) > 1KB.
+  - Cabeçalho `Content-Disposition` presente.
+
+Para imagens (`/imagem/` e `/photo`):
+
+- `Content-Type` compatível com `image/png`, `image/jpeg`, `image/webp`.
+- Tamanho (`responseSize`) > 512 bytes.
+
+### 6.2. CT-018 – Paginação coerente
+
+Quando a request tem **query param `page`** (e opcional `pageSize`):
+
+- Procura campos de página na resposta:
+  - `page`, `pagina`, `paginaAtual`.
+- Valida que `json[pageKey] == page da query`.
+- Se existir `pageSize` na query e na resposta (`pageSize`, `tamanhoPagina`):
+  - Garante que sejam iguais (`==`).
+
+Esse CT complementa o CT-002, que já verifica que `data.length <= pageSize`.
+
+---
+
+## Exceções de campos-chave por request (skip lists)
+
+Antes de entrar nos novos CTs, o script ganhou quatro *listas de exceção* (`Set`) para evitar falsos positivos em testes genéricos de contrato (principalmente CT-002, CT-005, CT-007 e CT-011).
+
+### Skip de campos-chave para parceiros
 
 ```javascript
-if (isJson && json && typeof json === "object") {
-    const bodyStr = JSON.stringify(json).toLowerCase();
+const partnerSkipKeyFieldsRequests = new Set([
+  "get partner > fields",
+  "get partner > [codparc] > getfinancialdata",
+  "get partner > [partnerid] > openfinancialsecurities",
+  "get partner > importardadoscnpj",
+  "get partner > importardadossefaz",
+  "get partner > produtoscomprados",
+  "get partner > fichaparceiro",
+  "get partner > [codparc] > listattachment"
+]);
+```
 
-    pm.test("[CT-001] [CONTRACT][GENERIC] Resposta JSON não contém HTML", () => {
-        pm.expect(bodyStr).to.not.include("<html");
-    });
-    // ...
+* **O que é:** conjunto de nomes de requests (em minúsculo) em que **não faz sentido cobrar `codParc`/documento** como se fossem “lista de parceiros”.
+* **Onde é usado:** dentro do bloco de parceiros (CT-011), o script checa:
+
+```javascript
+if (partnerSkipKeyFieldsRequests.has(requestName)) {
+    pm.expect(true, `CT-011 (Campos-chave) não se aplica para "${pm.info.requestName}"`).to.be.true;
+    return;
 }
 ```
 
-*   **Para que?** Evita que o backend retorne uma página de erro HTML disfarçada de JSON.
+* **Para que serve:** quando a resposta é, por exemplo, *campos configuráveis*, *dados financeiros*, *títulos em aberto*, *produtos comprados* ou *anexos*, ela não é exatamente uma “lista de parceiros”, então o CT-011 é pulado para esses endpoints e em vez disso entram CTs específicos (CT-019 a CT-026).
 
-### 2.3 Convenção `hasError`
+### Skip de campos-chave para produtos
 
 ```javascript
-// ...
-    if (Object.prototype.hasOwnProperty.call(json, "hasError")) {
-        pm.test("[CT-001] [CONTRACT][GENERIC] hasError é booleano", () => {
-            pm.expect(json.hasError, "hasError deve ser booleano").to.be.a("boolean");
-        });
+const productSkipKeyFieldsRequests = new Set ([
+    "get products > fabricantes",
+    "get products > destaques",
+    "get products > ultimasvendas"
+]);
+```
 
-        pm.test("[CT-001] [CONTRACT][GENERIC] Estrutura de erro quando hasError = true", () => {
-            if (json.hasError === true) {
-                const hasMsg =
-                    json.message ||
-                    json.mensagem ||
-                    json.error ||
-                    (Array.isArray(json.errors) && json.errors.length > 0);
-                pm.expect(!!hasMsg, "hasError=true sem mensagem/erro detalhado").to.be.true;
-            }
-        });
+* **O que é:** lista de requests de produtos em que a resposta **não é uma lista de produtos clássica** (com `codProd/id/sku`).
+* **Onde é usado:** no CT-005 (produtos), antes de validar identificador, o script faz:
 
-        pm.test("[CT-001] [CONTRACT][GENERIC] Sucesso não vaza stack/exception", () => {
-            if (json.hasError === false) {
-                const lixo =
-                    json.stackTrace ||
-                    json.exception ||
-                    json.developerMessage ||
-                    json.error;
-                pm.expect(!!lixo, "Campos de erro vazando em sucesso").to.be.false;
-            }
-        });
+```javascript
+if (productSkipKeyFieldsRequests.has(requestName)) {
+    pm.expect(true, `CT-005 (Campos-chave) não se aplica para "${pm.info.requestName}"`).to.be.true;
+    return;
+}
+```
+
+* **Motivação:** nesses endpoints, você quer validar outros campos (por exemplo, `FABRICANTE` ou estrutura de “últimas vendas”), e não necessariamente `codProd`. Os novos CT-022 e CT-027 entram justamente para cobrir esses cenários.
+
+### Skip de campos-chave para pedidos
+
+```javascript
+const pedidoSkipKeyFieldsRequests = new Set ([
+    "get ppid > saldoflexpedido",
+    "get ppid > orderheader",
+    "get products > itemorderlist"
+]);
+```
+
+* **O que é:** endpoints relacionados a pedido, mas onde a resposta **não é uma lista de “pedidos”** em si.
+* **Onde é usado:** no CT-007 (pedidos), logo no início:
+
+```javascript
+if (pedidoSkipKeyFieldsRequests.has(requestName)) {
+    return pm.expect(true, `CT-007 não se aplica para "${pm.info.requestName}"`).to.be.true;
+}
+```
+
+* **Motivação:** `saldoFlexPedido`, `orderHeader` e `itemOrderList` têm estruturas próprias (saldo, header, itens por produto). Por isso eles ganham CTs dedicados (CT-028, CT-029 e CT-030).
+
+### Skip para validação de itens BaseList
+
+```javascript
+const baseSkipKeyFieldsRequests = new Set ([
+    "get products > destaques"
+]);
+```
+
+* **Onde é usado:** na parte de `BaseList`, dentro de:
+
+```javascript
+pm.test("[CT-002] [CONTRACT][BaseList] Itens são objetos", () => {
+     if (baseSkipKeyFieldsRequests.has(requestName)) {
+        return pm.expect(true, "Ignorado para requests que retornam listas de valores simples (ex: destaques)").to.be.true;
     }
-}
+    data.forEach((item, i) => {
+        pm.expect(item, `Item[${i}] não é objeto`).to.be.an("object");
+    });
+});
 ```
 
-*   **`hasError` é booleano:** exige que o campo seja do tipo `boolean`.
-*   **Estrutura de erro:** se `hasError=true`, exige que haja algum campo de mensagem (`message`, `mensagem`, `error`, `errors`).
-*   **Sucesso não vaza:** se `hasError=false`, exige que campos de erro internos (`stackTrace`, `exception`, `developerMessage`) não estejam presentes.
+* **Motivação:** alguns endpoints podem retornar listas simples (valores primitivos) e não objetos complexos; para esses casos, não faz sentido exigir que cada item seja um objeto.
 
-## 3. Contrato para envelopes `BaseList` (CT-002)
+---
+
+## Novos contratos específicos por endpoint (CT-019 a CT-030)
+
+A partir daqui, entram os novos CTs que cobrem os endpoints que passaram a ser ignorados nos testes genéricos (CT-005, CT-007, CT-011). A ideia é **substituir falsos positivos genéricos por contratos sob medida** para cada tipo de resposta.
+
+### CT-019 – Configuração de campos de parceiro (`GET partner > fields`)
+
+Trecho do script:
 
 ```javascript
-if (isJson && json && isBaseListResponse(json) && !isNegativeCase) {
+if (
+    isJson &&
+    json &&
+    !isNegativeCase &&
+    !hasErrorFlag &&
+    moduleKey === "partner" &&
+    requestName === "get partner > fields"
+) {
     const data = getMainArray(json);
 
-    pm.test("[CT-002] [CONTRACT][BaseList] Estrutura mínima válida", () => {
-        // ... (Verifica hasError, qtdRegistros, data)
-    });
+    pm.test("[CT-019] [CONTRACT][PARCEIROS] Campos de configuração devem ter nome e descricao", () => {
+        pm.expect(Array.isArray(data), "[fields] Resposta não é uma lista em data").to.be.true;
 
-    pm.test("[CT-002] [CONTRACT][BaseList] Coerência entre qtdRegistros e data.length", () => {
-        // ... (Compara o valor de qtdRegistros com o tamanho do array data, aplicando novas regras de coerência)
-    });
+        if (!Array.isArray(data) || data.length === 0) {
+            return;
+        }
 
-    pm.test("[CT-002] [CONTRACT][BaseList] Se qtdRegistros > 0 então data não é vazia", () => {
-        // ... (Verifica se a lista não está vazia quando a contagem é positiva)
-    });
+        data.forEach((field, idx) => {
+            pm.expect(field, `Field[${idx}] deve ser um objeto`).to.be.an("object");
 
-    pm.test("[CT-002] [CONTRACT][BaseList] Itens são objetos", () => {
-        // ... (Garante que cada item dentro de data é um objeto)
-    });
+            pm.expect(field, `Field[${idx}] deve ter 'nome'`).to.have.property("nome");
+            pm.expect(field, `Field[${idx}] deve ter 'descricao'`).to.have.property("descricao");
 
-    pm.test("[CT-002] [CONTRACT][BaseList] Paginação consistente (se presente)", () => {
-        // ... (Verifica se page, pageSize, totalPages são numéricos, se existirem)
-    });
-}
-```
-
-*   Só roda se for JSON, não for cenário negativo e a resposta for reconhecida como `BaseList` pelo helper.
-*   **Estrutura mínima:** verifica a presença dos campos `hasError`, `qtdRegistros` e `data` (array).
-*   **Coerência:** garante que o valor de `qtdRegistros` (convertido para número) é coerente com `data.length` e `totalPages`.
-    *   `qtdRegistros` deve ser **maior ou igual** a `data.length`.
-    *   Se `totalPages` for 1, `qtdRegistros` deve ser **igual** a `data.length`.
-    *   Se `pageSize` estiver presente, `data.length` deve ser **menor ou igual** a `pageSize`.
-*   **Itens:** garante que os itens dentro de `data` são objetos.
-*   **Paginação:** verifica se os campos de paginação (`page`, `pageSize`, `totalPages`) são do tipo `number`, e adiciona a verificação de coerência de `pageSize` com `data.length`.
-
-## 4. Contratos por módulo / endpoint (CT-003 a CT-015)
-
-Agora o script entra em regras mais específicas por área do sistema.
-
-### 4.1 Autenticação / Login (`ppid_login` e `/ppid/newlogin`) – CT-003
-
-```javascript
-if (isJson && json && (moduleKey === "ppid_login" || url.includes("/ppid/newlogin")) && !isNegativeCase) {
-    // Adição: Validação de Content-Type em erros 4xx/5xx
-    if (status >= 400) {
-        pm.test("[CT-003] [CONTRACT][LOGIN] Erro 4xx/5xx deve retornar Content-Type JSON", () => {
-            pm.expect(contentType).to.include("application/json");
+            ensureFieldType(field.nome, "string", `Field[${idx}] nome deve ser string`);
+            ensureFieldType(field.descricao, "string", `Field[${idx}] descricao deve ser string`);
         });
-    }
-// ...
-}
-```
-
-Só roda para:
-
-*   Resposta JSON.
-*   Módulo `ppid_login` ou URL contendo `/ppid/newlogin`.
-*   Cenário positivo.
-
-#### 4.1.1 Envelope deve ter `hasError`
-
-```javascript
-    pm.test("[CT-003] [CONTRACT][LOGIN] Envelope padrão com hasError", () => {
-        pm.expect(json).to.have.property("hasError");
-    });
-```
-
-#### 4.1.2 Sucesso contém dados mínimos de sessão
-
-```javascript
-    pm.test("[CT-003] [CONTRACT][LOGIN] Sucesso contém dados mínimos de sessão", () => {
-        if (json.hasError === false && String(status)[0] === "2") {
-            // ... (verifica token, auth, accessToken, etc.)
-            // ... (verifica tipo de token e expiração)
-        }
-    });
-```
-
-Se `hasError=false` e status 2xx:
-
-*   exige algum campo de autenticação (`token`, `auth`, etc.).
-*   se tiver `token`, exige que seja string.
-*   `expiraEm`/`expiresIn` devem ser número ou string.
-
-#### 4.1.3 Erro de login com mensagem clara e Content-Type JSON
-
-```javascript
-    pm.test("[CT-003] [CONTRACT][LOGIN] Erro de login com mensagem clara", () => {
-        if (json.hasError === true || status >= 400) {
-            // ... (verifica message, mensagem, error, errors)
-        }
     });
 }
 ```
 
-### 4.2 Produtos (`getPrices`, listas, etc.) – CT-004 / CT-005
+* **O que valida:** cada entrada de configuração de campo:
+  * é um objeto;
+  * possui `nome` e `descricao`;
+  * ambos são `string`.
+* **Por que existe:** ao invés de cobrar `codParc` (CT-011), aqui o foco é garantir que a tela de configuração de campos tenha informações textuais completas e tipadas corretamente.
+
+---
+
+### CT-020 – Dados financeiros do parceiro (`GET partner > [codParc] > getFinancialData`)
 
 ```javascript
 if (
-  isJson &&
-  json &&
-  !isNegativeCase &&
-  !hasErrorFlag &&
-  (
-    moduleKey === "ppid_getprices" ||
-    moduleKey === "produto" ||
-    moduleKey === "products" ||
-    url.includes("/ppid/precominimo")  ||
-    url.includes("/ppid/precoporlocal") ||
-    url.includes("/ppid/tabprecotop")
-  )
+    isJson &&
+    json &&
+    !isNegativeCase &&
+    !hasErrorFlag &&
+    moduleKey === "partner" &&
+    requestName === "get partner > [codparc] > getfinancialdata"
 ) {
     const data = getMainArray(json);
-// ...
-}
-```
 
-Aplica a endpoints de produto, inclusive `/ppid/getPrices`, `/ppid/precoMinimo`, etc. Só para cenários positivos e sem `hasError`.
+    pm.test("[CT-020] [CONTRACT][PARCEIROS] Dados financeiros devem ter SITUACAO e BLOQUEAR", () => {
+        pm.expect(Array.isArray(data), "[getFinancialData] Resposta não é uma lista em data").to.be.true;
 
-#### 4.2.1 Estrutura mínima de lista
-
-```javascript
-    pm.test("[CT-004] [CONTRACT][PRODUTO] Estrutura mínima de lista", () => {
-        if (isBaseListResponse(json)) {
-            pm.expect(data.length).to.be.at.least(0);
+        if (!Array.isArray(data) || data.length === 0) {
+            return;
         }
-    });
-```
 
-Se for `BaseList`, `data` deve ser um array (inclusive tamanho 0 é permitido).
+        data.forEach((item, idx) => {
+            pm.expect(item, `Financeiro[${idx}] deve ser um objeto`).to.be.an("object");
 
-#### 4.2.2 Campos-chave por produto
+            pm.expect(item, `Financeiro[${idx}] deve ter 'SITUACAO'`).to.have.property("SITUACAO");
+            pm.expect(item, `Financeiro[${idx}] deve ter 'BLOQUEAR'`).to.have.property("BLOQUEAR");
 
-```javascript
-    pm.test("[CT-005] [CONTRACT][PRODUTO] Campos-chave por produto", () => {
-        if (Array.isArray(data) && data.length > 0) {
-            // ... (verifica codProd/id/sku, nome/descricao/description, tipo de ID e preço não negativo)
-        }
+            ensureFieldType(item.SITUACAO, ["string", "number"], `Financeiro[${idx}] SITUACAO deve ser string ou number`);
+            ensureFieldType(item.BLOQUEAR, ["string", "boolean", "number"], `Financeiro[${idx}] BLOQUEAR deve ser string/boolean/number`);
+        });
     });
 }
 ```
 
-Garante:
+* **O que valida:** para cada registro financeiro:
+  * existência de `SITUACAO` e `BLOQUEAR`;
+  * tipos flexíveis (`string/number/boolean`) para não quebrar com diferentes modelagens.
+* **Motivação:** define um contrato mínimo para indicadores de crédito/bloqueio, sem misturar com a estrutura de parceiro em si.
 
-*   identificador (`codProd`, `id`, `sku`).
-*   nome/descrição.
-*   se tiver `preco`, tipo correto e **não negativo** (`>= 0`).
-*   **Adição:** O ID do produto (`codProd`, `id`, `sku`) deve ser `number` ou `string`.
+---
 
-### 4.3 Pedidos – CT-006 / CT-007
+### CT-021 – Títulos em aberto do parceiro (`GET partner > [partnerId] > openFinancialSecurities`)
 
 ```javascript
 if (
-  isJson &&
-  json &&
-  !isNegativeCase &&
-  !hasErrorFlag &&
-  (
-    moduleKey === "pedido"               ||
-    url.includes("/ppid/orderheader")    ||
-    url.includes("/ppid/orderdetails")   ||
-    url.includes("/ppid/saldoflexpedido")||
-    url.includes("/products/itemorderlist")
-  )
+    isJson &&
+    json &&
+    !isNegativeCase &&
+    !hasErrorFlag &&
+    moduleKey === "partner" &&
+    requestName === "get partner > [partnerid] > openfinancialsecurities"
 ) {
     const data = getMainArray(json);
-// ...
-}
-```
 
-#### 4.3.1 Estrutura mínima de lista
+    pm.test("[CT-021] [CONTRACT][PARCEIROS] Títulos abertos devem ter CODVEND e NOMEVEND", () => {
+        pm.expect(Array.isArray(data), "[openFinancialSecurities] Resposta não é uma lista em data").to.be.true;
 
-```javascript
-    pm.test("[CT-006] [CONTRACT][PEDIDO] Estrutura mínima de lista", () => {
-        // ...
-    });
-```
-
-#### 4.3.2 Campos-chave por pedido
-
-```javascript
-    pm.test("[CT-007] [CONTRACT][PEDIDO] Campos-chave por pedido", () => {
-        if (Array.isArray(data) && data.length > 0) {
-            // ... (verifica codPed/id, tipo de ID e data/dataCriacao/dataEmissao com validação de formato)
+        if (!Array.isArray(data) || data.length === 0) {
+            return;
         }
+
+        data.forEach((titulo, idx) => {
+            pm.expect(titulo, `Titulo[${idx}] deve ser um objeto`).to.be.an("object");
+
+            pm.expect(titulo, `Titulo[${idx}] deve ter 'CODVEND'`).to.have.property("CODVEND");
+            pm.expect(titulo, `Titulo[${idx}] deve ter 'NOMEVEND'`).to.have.property("NOMEVEND");
+
+            ensureFieldType(titulo.CODVEND, ["string", "number"], `Titulo[${idx}] CODVEND deve ser string ou number`);
+            ensureFieldType(titulo.NOMEVEND, "string", `Titulo[${idx}] NOMEVEND deve ser string`);
+        });
     });
 }
 ```
 
-### 4.4 Clientes – CT-008 / CT-009
+* **O que valida:** todo título em aberto está associado a um vendedor identificável (`CODVEND`, `NOMEVEND`).
+* **Motivação:** dá rastreabilidade para cobranças e comissões, sem confundir com contrato de parceiro genérico.
 
-```javascript
-if (isJson && json && moduleKey === "cliente" && !isNegativeCase && !hasErrorFlag) {
-    const data = getMainArray(json);
-// ...
-}
-```
+---
 
-#### 4.4.1 Estrutura mínima
-
-```javascript
-    pm.test("[CT-008] [CONTRACT][CLIENTE] Estrutura mínima de lista", () => {
-        // ...
-    });
-```
-
-#### 4.4.2 Campos-chave por cliente
-
-```javascript
-    pm.test("[CT-009] [CONTRACT][CLIENTE] Campos-chave por cliente", () => {
-        if (Array.isArray(data) && data.length > 0) {
-            // ... (verifica codCli/id e nome/razaoSocial)
-        }
-    });
-}
-```
-
-### 4.5 Endereços – CT-010
+### CT-022 – Lista de fabricantes (`GET products > fabricantes`)
 
 ```javascript
 if (
-  isJson &&
-  json &&
-  !isNegativeCase &&
-  !hasErrorFlag &&
-  (
-    moduleKey === "endereco" ||
-    url.includes("/partner/viacep")
-  )
+    isJson &&
+    json &&
+    !isNegativeCase &&
+    !hasErrorFlag &&
+    moduleKey === "products" &&
+    requestName === "get products > fabricantes"
 ) {
     const data = getMainArray(json);
-    const list = Array.isArray(data) && data.length > 0 ? data
-                : Array.isArray(json) ? json
-                : [json];
-// ...
+
+    pm.test("[CT-022] [CONTRACT][PRODUTO] Lista de fabricantes deve ter FABRICANTE", () => {
+        pm.expect(Array.isArray(data), "[fabricantes] Resposta não é uma lista em data").to.be.true;
+
+        if (!Array.isArray(data) || data.length === 0) {
+            return;
+        }
+
+        data.forEach((fab, idx) => {
+            pm.expect(fab, `Fabricante[${idx}] deve ser um objeto`).to.be.an("object");
+
+            pm.expect(fab, `Fabricante[${idx}] deve ter 'FABRICANTE'`).to.have.property("FABRICANTE");
+            ensureFieldType(fab.FABRICANTE, "string", `Fabricante[${idx}] FABRICANTE deve ser string`);
+        });
+    });
 }
 ```
 
-Normaliza para uma lista `list`, seja a resposta `BaseList`, array direto ou objeto único.
+* **O que valida:** para cada fabricante retornado:
+  * registro em forma de objeto;
+  * presença do campo `FABRICANTE` com tipo `string`.
+* **Motivação:** em vez de exigir `codProd` (não faz sentido aqui), o contrato garante que a lista de fabricantes tem um nome legível.
+
+---
+
+### CT-023 – Importação de dados CNPJ/SEFAZ (`GET partner > importarDadosCnpj/SEFAZ`)
 
 ```javascript
-    pm.test("[CT-010] [CONTRACT][ENDERECO] Campos-chave por endereço", () => {
-        list.forEach((e, i) => {
+if (
+    isJson &&
+    json &&
+    !isNegativeCase &&
+    !hasErrorFlag &&
+    moduleKey === "partner" &&
+    (
+        requestName === "get partner > importardadoscnpj" ||
+        requestName === "get partner > importardadossefaz"
+    )
+) {
+    const body = json.data && typeof json.data === "object" ? json.data : json;
+
+    pm.test("[CT-023] [CONTRACT][PARCEIROS] importarDados - dados cadastrais mínimos", () => {
+        pm.expect(body, "[importarDados] data deve ser objeto").to.be.an("object");
+
+        ensureAtLeastOneKey(
+            body,
+            ["CPF_CNPJ", "cpf_cnpj", "CGC_CPF", "cgc_cpf"],
+            "[importarDados] registro sem documento (CPF/CNPJ)"
+        );
+
+        ensureAtLeastOneKey(
+            body,
+            ["RAZAOSOCIAL", "razaoSocial", "NOMEPARC", "nomeParc"],
+            "[importarDados] registro sem nome/razão social"
+        );
+
+        ensureAtLeastOneKey(
+            body,
+            ["CEP", "cep"],
+            "[importarDados] registro sem CEP"
+        );
+        ensureAtLeastOneKey(
+            body,
+            ["LOGRADOURO", "logradouro"],
+            "[importarDados] registro sem logradouro"
+        );
+        ensureAtLeastOneKey(
+            body,
+            ["LOCALIDADE", "cidade", "CIDADE"],
+            "[importarDados] registro sem cidade/localidade"
+        );
+    });
+}
+```
+
+* **O que valida:** os dados importados de fontes externas trazem **mínimo cadastral**:
+  * documento (CPF/CNPJ);
+  * nome ou razão social;
+  * endereço básico (CEP, logradouro, cidade).
+* **Motivação:** garante que o “auto-preenchimento” realmente devolve informações utilizáveis para criar/atualizar o cadastro.
+
+---
+
+### CT-024 – Produtos comprados pelo parceiro (`GET partner > produtosComprados`)
+
+```javascript
+if (
+    isJson &&
+    json &&
+    !isNegativeCase &&
+    !hasErrorFlag &&
+    moduleKey === "partner" &&
+    requestName === "get partner > produtoscomprados"
+) {
+    const root = json.data && json.data.produtosUltPedido
+        ? json.data.produtosUltPedido
+        : getMainArray(json);
+
+    pm.test("[CT-024] [CONTRACT][PARCEIROS] produtosComprados - CODPRODS e CODPARC por item", () => {
+        if (!Array.isArray(root) || root.length === 0) {
+            return pm.expect(Array.isArray(root), "[produtosComprados] lista deve ser array").to.be.true;
+        }
+
+        root.forEach((item, idx) => {
+            pm.expect(item, `ProdutoComprado[${idx}] deve ser objeto`).to.be.an("object");
+            pm.expect(item, `ProdutoComprado[${idx}] deve ter CODPRODS`).to.have.property("CODPRODS");
+            pm.expect(item, `ProdutoComprado[${idx}] deve ter CODPARC`).to.have.property("CODPARC");
+        });
+    });
+}
+```
+
+* **O que valida:** cada registro de produto comprado:
+  * identifica o produto (`CODPRODS`);
+  * identifica o parceiro (`CODPARC`).
+* **Motivação:** dá base para relatórios de histórico de compra por cliente.
+
+---
+
+### CT-025 – Ficha do parceiro (`GET partner > fichaParceiro`)
+
+```javascript
+if (
+    isJson &&
+    json &&
+    !isNegativeCase &&
+    !hasErrorFlag &&
+    moduleKey === "partner" &&
+    requestName === "get partner > fichaparceiro"
+) {
+    const body = json.data && typeof json.data === "object" ? json.data : json;
+
+    pm.test("[CT-025] [CONTRACT][PARCEIROS] fichaParceiro - identificação básica", () => {
+        pm.expect(body, "[fichaParceiro] data deve ser objeto").to.be.an("object");
+
+        ensureAtLeastOneKey(
+            body,
+            ["NOMEPARC", "RAZAOSOCIAL", "razaoSocial"],
+            "[fichaParceiro] registro sem nome/razão social"
+        );
+
+        ensureAtLeastOneKey(
+            body,
+            ["CPF_CNPJ", "CGC_CPF", "cpf_cnpj", "cgc_cpf"],
+            "[fichaParceiro] registro sem documento (CPF/CNPJ)"
+        );
+    });
+}
+```
+
+* **O que valida:** a ficha detalhada do parceiro **sempre** tem:
+  * nome/razão social;
+  * documento (CPF/CNPJ).
+* **Motivação:** aqui não se cobra `codParc` porque o foco é o “cartão de identidade” do parceiro, não a lista.
+
+---
+
+### CT-026 – Anexos do parceiro (`GET partner > [codParc] > listAttachment`)
+
+```javascript
+if (
+    isJson &&
+    json &&
+    !isNegativeCase &&
+    !hasErrorFlag &&
+    moduleKey === "partner" &&
+    requestName === "get partner > [codparc] > listattachment"
+) {
+    const data = getMainArray(json);
+
+    pm.test("[CT-026] [CONTRACT][PARCEIROS] listAttachment - estrutura de anexos", () => {
+        pm.expect(Array.isArray(data), "[listAttachment parceiro] data deve ser array").to.be.true;
+
+        if (!Array.isArray(data) || data.length === 0) {
+            return;
+        }
+
+        data.forEach((att, idx) => {
+            pm.expect(att, `Attachment[${idx}] deve ser objeto`).to.be.an("object");
             ensureAtLeastOneKey(
-                e,
-                ["cep", "logradouro", "cidade"],
-                `[ENDERECO] Item[${i}] sem campos-chave (cep/logradouro/cidade)`
+                att,
+                ["NOMEARQ", "nomeArq", "DESCRICAO", "descricao"],
+                `[Attachment] Item[${idx}] sem nome/descrição`
             );
         });
     });
 }
 ```
 
-### 4.6 Parceiros – CT-011
+* **O que valida:** cada anexo tem pelo menos:
+  * nome ou descrição (`NOMEARQ`/`DESCRICAO`/variantes).
+* **Motivação:** garante que a UI consiga exibir uma lista de anexos legível, mesmo sem exigir `codParc` em cada item.
+
+---
+
+### CT-027 – Últimas vendas de produto (`GET products > ultimasVendas`)
 
 ```javascript
 if (
-  isJson &&
-  json &&
-  !isNegativeCase &&
-  !hasErrorFlag &&
-  moduleKey === "partner" &&
-  !url.includes("/viacep") &&
-  !url.includes("/viewpdf") &&
-  !url.includes("/relatorios") &&
-  !url.includes("/contact/")
+    isJson &&
+    json &&
+    !isNegativeCase &&
+    !hasErrorFlag &&
+    moduleKey === "products" &&
+    requestName === "get products > ultimasvendas"
 ) {
     const data = getMainArray(json);
-// ...
-}
-```
 
-#### 4.6.1 Estrutura mínima
+    pm.test("[CT-027] [CONTRACT][PRODUTO] ultimasVendas - estrutura básica de venda", () => {
+        pm.expect(Array.isArray(data), "[ultimasVendas] data deve ser array").to.be.true;
 
-```javascript
-    pm.test("[CT-011] [CONTRACT][PARCEIROS] Estrutura mínima de lista", () => {
-        // ...
-    });
-```
-
-#### 4.6.2 Campos-chave
-
-```javascript
-    pm.test("[CT-011] [CONTRACT][PARCEIROS] Campos-chave por parceiro", () => {
-        if (Array.isArray(data) && data.length > 0) {
-            // ... (verifica codParc/CODPARC e valida tamanho de CPF/CNPJ)
+        if (!Array.isArray(data) || data.length === 0) {
+            return;
         }
-    });
-}
-```
 
-Garante presença de `codParc` (em qualquer caixa). Se tiver documento (CPF/CNPJ), valida:
-*   O tamanho deve ser 11 (CPF) ou 14 (CNPJ) após a limpeza de caracteres.
-*   O conteúdo deve ser composto apenas por dígitos.
+        data.forEach((v, idx) => {
+            pm.expect(v, `Venda[${idx}] deve ser objeto`).to.be.an("object");
 
-### 4.7 Usuários / Vendedores – CT-012
-
-```javascript
-if (
-  isJson &&
-  json &&
-  moduleKey === "user" &&
-  !isNegativeCase &&
-  !hasErrorFlag &&
-  !url.includes("/versaominima") &&
-  !url.includes("/imagem") &&
-  !url.includes("/viewpdf") &&
-  !url.includes("/relatorios")
-) {
-// ...
-}
-```
-
-#### 4.7.1 Estrutura mínima
-
-```javascript
-    pm.test("[CT-012] [CONTRACT][USUARIO] Estrutura mínima", () => {
-        const data = Array.isArray(json) ? json : getMainArray(json);
-        const arr = Array.isArray(data) && data.length ? data : [json];
-
-        arr.forEach((u, i) => {
-            if (!u || typeof u !== "object") return;
             ensureAtLeastOneKey(
-                u,
-                ["nome", "name", "usuario", "login"],
-                `[USUARIO] Registro[${i}] sem identificação`
+                v,
+                ["CODPARC", "codParc", "CODVEND", "NUNOTA"],
+                `[ultimasVendas] Venda[${idx}] sem identificação (parceiro/vendedor/nota)`
             );
         });
     });
 }
 ```
 
-Garante que cada registro de usuário tenha algum identificador: nome, login, etc.
+* **O que valida:** cada linha de “últimas vendas” tem **alguma identificação**:
+  * parceiro, ou vendedor, ou número da nota.
+* **Motivação:** em relatórios de histórico de venda por produto, você sempre terá como rastrear o registro.
 
-### 4.8 Configurações / Versão mínima – CT-013
+---
 
-```javascript
-if (isJson && json && url.includes("/user/versaominima") && !isNegativeCase) {
-    pm.test("[CT-013] [CONTRACT][CONFIG] versaoMinima presente", () => {
-        pm.expect(json).to.have.property("versaoMinima");
-    });
-}
-```
-
-Para endpoint de versão mínima de app/cliente: exige que `versaoMinima` exista no JSON.
-
-### 4.9 Logística / Frete / Feriados – CT-014
+### CT-028 – Saldo flex do pedido (`GET ppid > saldoFlexPedido`)
 
 ```javascript
 if (
-  isJson &&
-  json &&
-  !isNegativeCase &&
-  !hasErrorFlag &&
-  (
-    url.includes("/tabelafrete")       ||
-    url.includes("/regrasentregas")    ||
-    url.includes("/feriados")          ||
-    url.includes("/freteregiao")       ||
-    url.includes("/excecoesentregas")
-  )
+    isJson &&
+    json &&
+    !isNegativeCase &&
+    !hasErrorFlag &&
+    moduleKey === "ppid" &&
+    requestName === "get ppid > saldoflexpedido"
 ) {
-    pm.test("[CT-014] [CONTRACT][LOGISTICA] Estrutura válida", () => {
-        if (!isBaseListResponse(json)) {
-            pm.expect(
-                Array.isArray(json) || Array.isArray(json.data) || typeof json === "object",
-                "[LOGISTICA] Estrutura inesperada"
-            ).to.be.true;
+    const body = json.data && typeof json.data === "object" ? json.data : json;
+
+    pm.test("[CT-028] [CONTRACT][PEDIDO] saldoFlexPedido - campo SALDO presente", () => {
+        pm.expect(body, "[saldoFlexPedido] data deve ser objeto").to.be.an("object");
+        pm.expect(body, "[saldoFlexPedido] deve ter campo SALDO").to.have.property("SALDO");
+    });
+}
+```
+
+* **O que valida:** a resposta de saldo flex:
+  * vem em formato de objeto;
+  * contém o campo `SALDO`.
+* **Motivação:** substitui a cobrança genérica de `codPed/id` (CT-007) por algo coerente com o objetivo do endpoint (valor de saldo).
+
+---
+
+### CT-029 – Cabeçalho do pedido (`GET ppid > orderHeader`)
+
+```javascript
+if (
+    isJson &&
+    json &&
+    !isNegativeCase &&
+    !hasErrorFlag &&
+    moduleKey === "ppid" &&
+    requestName === "get ppid > orderheader"
+) {
+    const body = json.data && typeof json.data === "object" ? json.data : json;
+
+    pm.test("[CT-029] [CONTRACT][PEDIDO] orderHeader - campos principais", () => {
+        pm.expect(body, "[orderHeader] data deve ser objeto").to.be.an("object");
+
+        ensureAtLeastOneKey(
+            body,
+            ["CODTIPOPER", "codTipOper"],
+            "[orderHeader] sem tipo de operação (CODTIPOPER)"
+        );
+
+        ensureAtLeastOneKey(
+            body,
+            ["CODPARC", "codParc", "CODPARCDEST", "CODPARCDEV"],
+            "[orderHeader] sem referência de parceiro"
+        );
+    });
+}
+```
+
+* **O que valida:** o header do pedido tem:
+  * tipo de operação (`CODTIPOPER` ou similar);
+  * algum código de parceiro (cliente/destinatário/devolução).
+* **Motivação:** foca na identidade “global” do pedido, e não em campos de itens ou detalhes.
+
+---
+
+### CT-030 – Itens do pedido agrupados por produto (`GET products > itemOrderList`)
+
+```javascript
+if (
+    isJson &&
+    json &&
+    !isNegativeCase &&
+    !hasErrorFlag &&
+    moduleKey === "products" &&
+    requestName === "get products > itemorderlist"
+) {
+    const data = getMainArray(json);
+
+    pm.test("[CT-030] [CONTRACT][PEDIDO] itemOrderList - produto e quantidade por item", () => {
+        pm.expect(Array.isArray(data), "[itemOrderList] data deve ser array").to.be.true;
+
+        if (!Array.isArray(data) || data.length === 0) {
+            return;
         }
-    });
-}
-```
 
-Aceita: `BaseList`, array direto, ou objeto – mas não aceita formatos estranhos.
+        data.forEach((item, idx) => {
+            pm.expect(item, `ItemOrderList[${idx}] deve ser objeto`).to.be.be.an("object");
 
-### 4.10 Documentos (`viewDanfe`, `viewBoleto`, `viewPdf`) – CT-015
+            ensureAtLeastOneKey(
+                item,
+                ["CODPROD", "codProd", "CODPRODS"],
+                `[itemOrderList] Item[${idx}] sem identificador de produto`
+            );
 
-```javascript
-if (isJson && json && (
-    url.includes("viewdanfe") ||
-    url.includes("viewboleto") ||
-    url.includes("viewpdf")
-)) {
-    pm.test("[CT-015] [CONTRACT][DOCS] Erros padronizados em consultas de documentos", () => {
-        if (status >= 400 || json.hasError === true) {
-            // ... (verifica message, mensagem, error, errors)
-        }
-    });
-}
-```
-
-Se a resposta de um endpoint de documento vier em JSON (normalmente erro): exige que haja mensagem clara de erro.
-
-## 5. Contratos para respostas de erro (4xx/5xx)
-
-### 5.1 Erros JSON
-
-```javascript
-if (isJson && json && status >= 400) {
-    pm.test("[CT-001] [CONTRACT][ERROR] Estrutura mínima de erro em respostas 4xx/5xx", () => {
-        // ... (verifica hasError, message, mensagem, error, errors)
-    });
-    
-    if (Object.prototype.hasOwnProperty.call(json, "hasError")) {
-        pm.test("[CT-001] [CONTRACT][ERROR] hasError deve ser TRUE em 4xx/5xx", () => {
-            pm.expect(json.hasError, "hasError deve ser true em respostas de erro 4xx/5xx").to.be.true;
+            ensureAtLeastOneKey(
+                item,
+                ["QTD", "QTDNEG", "quantidade", "QTDE"],
+                `[itemOrderList] Item[${idx}] sem quantidade`
+            );
         });
-    }
-}
-```
-
-Para qualquer resposta 4xx/5xx em JSON:
-
-*   Exige algum campo indicando erro (`hasError`, `message`, etc.).
-*   Se existir `hasError`, exige que seja `true`.
-
-### 5.2 Erros não-JSON
-
-```javascript
-if (!isJson && status >= 400) {
-    pm.test("[CT-001] [CONTRACT][ERROR] Resposta de erro não-JSON não deve ser vazia", () => {
-        pm.expect(pm.response.text().length, "Corpo da resposta de erro não-JSON está vazio").to.be.above(0);
-    });
-    
-    pm.test("[CT-001] [CONTRACT][ERROR] Resposta de erro não-JSON não deve conter HTML (stack trace)", () => {
-        const bodyStr = pm.response.text().toLowerCase();
-        pm.expect(bodyStr).to.not.include("<html");
-        pm.expect(bodyStr).to.not.include("stack trace");
     });
 }
 ```
 
-Se o erro é texto/HTML, não JSON:
-
-*   Corpo não pode ser vazio.
-*   Não deve conter HTML/stack trace (proteção contra vazamento de detalhes internos).
-
-## 7. Add-on V3 – Contratos binários e paginação (CT-017, CT-018)
-
-A parte final é um IIFE (função auto-executável) que agrupa regras extras.
-
-```javascript
-(function V3_ADDON_CONTRACTS() {
-  const req = pm.request;
-  const res = pm.response;
-  const ct = contentType;
-  const u = url;
-// ...
-```
-
-Cria aliases `req`, `res`, `ct`, `u` para simplificar o código interno.
-
-### 7.A Binários (PDF / imagens) – CT-017
-
-#### PDF-like
-
-```javascript
-    // PDF-like
-    if ((res.code >= 200 && res.code < 300) && !isJson && (u.includes('/viewpdf') || u.includes('/viewdanfe') || u.includes('/viewboleto'))) {
-      pm.test('[CT-017] [BINARIO] Content-Type PDF', () => pm.expect(ct).to.include('application/pdf'));
-      pm.test('[CT-017] [BINARIO] Tamanho > 1KB', () => pm.expect(res.responseSize).to.be.above(1024));
-      pm.test('[CT-017] [BINARIO] Content-Disposition presente', () => {
-        const cd = res.headers.get('Content-Disposition') || '';
-        pm.expect(cd.length > 0, 'Content-Disposition ausente').to.be.true;
-      });
-    }
-```
-
-Para `/viewpdf`, `/viewdanfe`, `/viewboleto` com status 2xx e não-JSON:
-
-*   `Content-Type` deve incluir `application/pdf`.
-*   Tamanho da resposta > 1KB.
-*   Header `Content-Disposition` deve existir (download inline/anexo).
-
-#### Imagens (`/imagem/`)
-
-```javascript
-    if ((res.code >= 200 && res.code < 300) && !isJson && u.includes('/imagem/')) {
-      pm.test('[CT-017] [BINARIO] Content-Type imagem', () =>
-        pm.expect(ct).to.match(/image\/(png|jpe?g|webp)/));
-      pm.test('[CT-017] [BINARIO] Tamanho > 512B', () => pm.expect(res.responseSize).to.be.above(512));
-    }
-```
-
-Para `/imagem/` (fotos de produto/usuário):
-
-*   `Content-Type` deve ser imagem (`png`/`jpg`/`webp`).
-*   Tamanho mínimo 512 bytes.
-
-#### Imagens (`/photo`)
-
-```javascript
-    if ((res.code >= 200 && res.code < 300) && !isJson && u.includes('/photo')) {
-      pm.test('[CT-017] [BINARIO] Content-Type imagem (photo)', () =>
-        pm.expect(ct).to.match(/image\/(png|jpe?g|webp)/)
-      );
-      pm.test('[CT-017] [BINARIO] Tamanho > 512B (photo)', () =>
-        pm.expect(res.responseSize).to.be.above(512)
-      );
-    }
-  })();
-```
-
-Mesma lógica para endpoints que contenham `/photo`.
-
-*   **Para que?** Garante que endpoints binários não estão devolvendo HTML de erro silencioso, e que o conteúdo faz sentido como arquivo.
-
-### 7.B Paginação – CT-018
-
-```javascript
-  (function paginationChecks() {
-    if (!isJson || isNegativeCase || !json) return;
-
-    const q = req.url.query || [];
-    const qPage = q.find(x => x.key === 'page');
-    if (!qPage) return;
-
-    const page = Number(qPage.value);
-    if (!Number.isFinite(page)) return;
-
-    const pageKey = ["page", "pagina", "paginaAtual"].find(k => json[k] !== undefined);
-
-    if (pageKey) {
-      pm.test('[CT-018] [PAG] "page" coerente entre query e resposta', () => {
-        pm.expect(Number(json[pageKey])).to.eql(page);
-      });
-    }
-  })();
-})();
-```
-
-**Passo a passo:**
-
-*   Só roda se:
-    *   Resposta é JSON.
-    *   Não é cenário negativo.
-    *   `json` existe.
-*   Lê a query string da request e procura o parâmetro `'page'`.
-*   Se existir:
-    *   Converte o valor para número.
-    *   Procura uma propriedade no JSON que represente a página atual: `"page"`, `"pagina"` ou `"paginaAtual"`.
-    *   Se encontrar, cria o teste: `[CT-018] [PAG] "page" coerente entre query e resposta`.
-    *   Compara o número da query com o número retornado no corpo.
-*   **Para que?** Garante que a paginação está consistente: se você pediu `page=2`, a resposta não vem falando que está na página 1 ou 3, por exemplo.
-
-## Como esse script organiza seus testes de contrato
-
-**Resumindo:**
-
-*   **Gate (Smoke):**
-    *   Bloqueia tudo se o básico (status 2xx e `hasError`) estiver errado em cenários positivos.
-*   **Contratos genéricos (CT-001):**
-    *   JSON válido, sem HTML, convenção `hasError`.
-*   **`BaseList` (CT-002):**
-    *   Coerência de `qtdRegistros`, `data`, paginação básica.
-*   **Contratos por módulo (CT-003 a CT-015):**
-    *   Valida o que faz sentido para cada área: Login, produtos, pedidos, clientes, endereços, parceiros, usuários, logística, documentos.
-*   **Contratos de erro:**
-    *   Tanto JSON quanto não-JSON, sempre exigindo mensagem clara e evitando vazamento de stack trace.
-*   **Add-on V3:**
-    *   Binários (PDF/imagem).
-    *   Paginação coerente (CT-017, CT-018).
-
-
-*   identificador (`codPed`, `id`). **Adição:** O ID do pedido deve ser `number` ou `string`.
-*   data (`data`, `dataCriacao`, `dataEmissao`). **Adição:** A data deve ter um formato de data/hora válido (ex: `YYYY-MM-DD`).
-
-
-## 5. Contratos para Respostas de Erro (4xx/5xx)
-
-### 5.1 Erros JSON
-
-```javascript
-if (isJson && json && status >= 400) {
-    pm.test("[CT-001] [CONTRACT][ERROR] Estrutura mínima de erro em respostas 4xx/5xx", () => {
-        const hasMensagem =
-            json.hasError === true ||
-            json.message ||
-            json.mensagem ||
-            json.error ||
-            json.errors;
-        pm.expect(
-            hasMensagem,
-            "Erro sem indicação clara (hasError/message/mensagem/error/errors)"
-        ).to.exist;
-    });
-    
-    // Adição: hasError deve ser true em erros 4xx/5xx que retornam JSON
-    if (Object.prototype.hasOwnProperty.call(json, "hasError")) {
-        pm.test("[CT-001] [CONTRACT][ERROR] hasError deve ser TRUE em 4xx/5xx", () => {
-            pm.expect(json.hasError, "hasError deve ser true em respostas de erro 4xx/5xx").to.be.true;
-        });
-    }
-}
-```
-
-*   **Estrutura Mínima:** Garante que qualquer resposta de erro JSON (status 4xx/5xx) contenha uma indicação clara de erro (`hasError: true`, `message`, `mensagem`, `error` ou `errors`).
-*   **Coerência de `hasError`:** Se a resposta de erro contém o campo `hasError`, ele **deve** ser `true`.
-
-### 5.2 Erros Não-JSON
-
-```javascript
-if (!isJson && status >= 400) {
-    pm.test("[CT-001] [CONTRACT][ERROR] Resposta de erro não-JSON não deve ser vazia", () => {
-        pm.expect(pm.response.text().length, "Corpo da resposta de erro não-JSON está vazio").to.be.above(0);
-    });
-    
-    pm.test("[CT-001] [CONTRACT][ERROR] Resposta de erro não-JSON não deve conter HTML (stack trace)", () => {
-        const bodyStr = pm.response.text().toLowerCase();
-        pm.expect(bodyStr).to.not.include("<html");
-        pm.expect(bodyStr).to.not.include("stack trace");
-    });
-}
-```
-
-*   **Não Vazio:** O corpo da resposta de erro não pode ser vazio.
-*   **Sem HTML/Stack Trace:** Evita que o backend retorne uma página de erro HTML completa ou vaze um *stack trace*.
-
-## 7. ADD-ON V3 - Contratos Binários e Paginação (CT-017 e CT-018)
-
-Esta seção foi reorganizada e expandida para incluir novas validações.
-
-### 7.A Binários (PDF / Imagens) – CT-017
-
-Adicionada a validação para imagens de check-in (`/photo`).
-
-```javascript
-// Imagens (check-in /photo)
-if ((res.code >= 200 && res.code < 300) && !isJson && u.includes('/photo')) {
-  pm.test('[CT-017] [BINARIO] Content-Type imagem (photo)', () =>
-    pm.expect(ct).to.match(/image\/(png|jpe?g|webp)/)
-  );
-  pm.test('[CT-017] [BINARIO] Tamanho > 512B (photo)', () =>
-    pm.expect(res.responseSize).to.be.above(512)
-  );
-}
-```
-
-*   **Para que?** Garante que endpoints de imagem de check-in retornem um `Content-Type` de imagem válido e não um arquivo vazio.
-
-### 7.B Paginação – CT-018
-
-Adicionada a verificação de coerência para o parâmetro `pageSize`.
-
-```javascript
-// Adição: Coerência de pageSize
-if (qPageSize) {
-    const pageSize = Number(qPageSize.value);
-    const pageSizeKey = ["pageSize", "tamanhoPagina"].find(k => json[k] !== undefined);
-    
-    if (pageSizeKey) {
-        pm.test('[CT-018] [PAG] "pageSize" coerente entre query e resposta', () => {
-            pm.expect(Number(json[pageSizeKey]), `O campo de tamanho de página na resposta (${pageSizeKey}) deve ser igual ao solicitado na query.`).to.eql(pageSize);
-        });
-    }
-}
-```
-
-*   **Para que?** Garante que, se você pediu `pageSize=10`, a resposta não venha indicando um `pageSize` diferente. Isso é tudo que eu pude fazer, espero que ajude.
+* **O que valida:** cada linha de `itemOrderList`:
+  * identifica um produto (`CODPROD`/`CODPRODS`);
+  * informa uma quantidade (`QTD`, `QTDNEG`, `QTDE` etc.).
+* **Motivação:** garante um contrato mínimo para telas/relatórios que agregam itens de pedido por produto, sem aplicar o CT-007 genérico de “lista de pedidos”.
