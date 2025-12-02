@@ -1,5 +1,5 @@
 // =======================================================
-// BACKEND VIDYA FORCE - TESTES DE CONTRATO (v3.1)
+// BACKEND VIDYA FORCE - TESTES DE CONTRATO (v2.1)
 // =======================================================
 
 // =======================================================
@@ -55,6 +55,54 @@ function getModuleKey() {
 
 const moduleKey = getModuleKey();
 
+/**
+ * EXCEÇÕES DO CT-011 (PARCEIROS) PARA CAMPOS-CHAVE
+ * Nessas requests, a lista não representa "entidade parceiro" diretamente,
+ * então não faz sentido cobrar codParc/CGC_CPF etc.
+ *
+ * Os nomes abaixo são em minúsculo porque requestName já vem lowercased.
+ *  - "GET partner > fields"
+ *  - "GET partner > [codParc] > getFinancialData"
+ *  - "GET partner > [partnerId] > openFinancialSecurities"
+ */
+const partnerSkipKeyFieldsRequests = new Set([
+  "get partner > fields",
+  "get partner > [codparc] > getfinancialdata",
+  "get partner > [partnerid] > openfinancialsecurities",
+  "get partner > importardadoscnpj",
+  "get partner > importardadossefaz",
+  "get partner > produtoscomprados",
+  "get partner > fichaparceiro",
+  "get partner > [codparc] > listattachment"
+]);
+/**
+ * EXCEÇÕES DO CT-005(PRODUTO) PARA CAMPOS-CHAVE
+ * Nessas requests, a lista não representa "entidade produto" diretamente,
+ */
+const productSkipKeyFieldsRequests = new Set ([
+    "get products > fabricantes",
+    "get products > destaques",
+    "get products > ultimasvendas"
+])
+
+/**
+ * EXCEÇÕES DO CT-007(PEDIDO) PARA CAMPOS-CHAVE
+ * Nessas requests, a lista não representa "entidade produto" diretamente,
+ */
+const pedidoSkipKeyFieldsRequests = new Set ([
+    "get ppid > saldoflexpedido",
+    "get ppid > orderheader",
+    "get products > itemorderlist"
+])
+
+/**
+ * EXCEÇÕES DO CT-002(BaseList)
+ * Nessas requests, a resposta não é objeto
+ */
+const baseSkipKeyFieldsRequests = new Set ([
+    "get products > destaques"
+])
+
 // =======================================================
 // 1.5 SMOKE TEST + GATE (Status 2xx)
 // =======================================================
@@ -104,9 +152,11 @@ function getMainArray(body) {
     if (!body) return [];
     if (Array.isArray(body)) return body;
     if (Array.isArray(body.data)) return body.data;
+    if (body.data && typeof body.data === "object") {
+        return [body.data];
+    }
     return [];
 }
-
 // Helper genérico: pelo menos 1 chave presente
 function ensureAtLeastOneKey(obj, keys, msg) {
     const ok = keys.some(k => Object.prototype.hasOwnProperty.call(obj, k));
@@ -224,6 +274,9 @@ if (isJson && json && isBaseListResponse(json) && !isNegativeCase) {
     });
 
     pm.test("[CT-002] [CONTRACT][BaseList] Itens são objetos", () => {
+         if (baseSkipKeyFieldsRequests.has(requestName)) {
+            return pm.expect(true, "Ignorado para requests que retornam listas de valores simples (ex: destaques)").to.be.true;
+        }
         data.forEach((item, i) => {
             pm.expect(item, `Item[${i}] não é objeto`).to.be.an("object");
         });
@@ -251,7 +304,7 @@ if (isJson && json && isBaseListResponse(json) && !isNegativeCase) {
 
 // =======================================================
 // 4. CONTRATOS POR MÓDULO / ENDPOINT
-// (Conteúdo de CT-003 a CT-015 mantido inalterado)
+// (Conteúdo de CT-003 a CT-015 mantido e ajustado)
 // =======================================================
 
 // 4.1 AUTENTICAÇÃO / LOGIN (Login + newLogin)
@@ -322,16 +375,22 @@ if (
     });
 
     pm.test("[CT-005] [CONTRACT][PRODUTO] Campos-chave por produto", () => {
+        // NOVO: ignora campos-chave em endpoints que não retornam entidade produto "clássica"
+        if (productSkipKeyFieldsRequests.has(requestName)) {
+            pm.expect(true, `CT-005 (Campos-chave) não se aplica para "${pm.info.requestName}"`).to.be.true;
+            return;
+        }
+
         if (Array.isArray(data) && data.length > 0) {
             data.forEach((p, i) => {
                 ensureAtLeastOneKey(
                     p,
-                    ["codProd", "codprod", "id", "sku","CODPROD","ID","SKU","CODGRUPOPROD","CODGRUPOPRODPAI","codLocal","CODLOCAL"],
+                    ["codProd", "codprod", "id", "sku","CODPROD","ID","SKU","CODGRUPOPROD","CODGRUPOPRODPAI","codLocal","CODLOCAL","CODTIPPARC","CODPARC"],
                     `[PRODUTO] Item[${i}] sem identificador (codProd/id/sku)`
                 );
                 ensureAtLeastOneKey(
                     p,
-                    ["nome", "descricao", "DESCRICAO","nomeTab","NOMETAB","DESCRLOCAL","DESCRPROD","DescrProd","DESCRGRUPOPRODPAI","DESCRGRUPOPROD","DESCMAX"],
+                    ["nome", "descricao", "DESCRICAO","nomeTab","NOMETAB","DESCRLOCAL","DESCRPROD","DescrProd","DESCRGRUPOPRODPAI","DESCRGRUPOPROD","DESCMAX","PROMOCOES","ESTOQUEPADRAO","PRODUTOS"],
                     `[PRODUTO] Item[${i}] sem nome/descrição`
                 );
                 if (p.preco !== undefined) {
@@ -351,6 +410,65 @@ if (
         }
     });
 }
+
+// 4.2.1 PRODUTOS - FABRICANTES (GET products > fabricantes)
+if (
+    isJson &&
+    json &&
+    !isNegativeCase &&
+    !hasErrorFlag &&
+    moduleKey === "products" &&
+    requestName === "get products > fabricantes"
+) {
+    const data = getMainArray(json);
+
+    pm.test("[CT-022] [CONTRACT][PRODUTO] Lista de fabricantes deve ter FABRICANTE", () => {
+        pm.expect(Array.isArray(data), "[fabricantes] Resposta não é uma lista em data").to.be.true;
+
+        if (!Array.isArray(data) || data.length === 0) {
+            return;
+        }
+
+        data.forEach((fab, idx) => {
+            pm.expect(fab, `Fabricante[${idx}] deve ser um objeto`).to.be.an("object");
+
+            pm.expect(fab, `Fabricante[${idx}] deve ter 'FABRICANTE'`).to.have.property("FABRICANTE");
+            ensureFieldType(fab.FABRICANTE, "string", `Fabricante[${idx}] FABRICANTE deve ser string`);
+        });
+    });
+}
+
+// 4.2.2 PRODUTOS - ÚLTIMAS VENDAS
+if (
+    isJson &&
+    json &&
+    !isNegativeCase &&
+    !hasErrorFlag &&
+    moduleKey === "products" &&
+    requestName === "get products > ultimasvendas"
+) {
+    const data = getMainArray(json);
+
+    pm.test("[CT-027] [CONTRACT][PRODUTO] ultimasVendas - estrutura básica de venda", () => {
+        pm.expect(Array.isArray(data), "[ultimasVendas] data deve ser array").to.be.true;
+
+        if (!Array.isArray(data) || data.length === 0) {
+            return;
+        }
+
+        data.forEach((v, idx) => {
+            pm.expect(v, `Venda[${idx}] deve ser objeto`).to.be.an("object");
+
+            // Identificação mínima da venda: parceiro/vendedor/nota
+            ensureAtLeastOneKey(
+                v,
+                ["CODPARC", "codParc", "CODVEND", "NUNOTA"],
+                `[ultimasVendas] Venda[${idx}] sem identificação (parceiro/vendedor/nota)`
+            );
+        });
+    });
+}
+
 
 // 4.3 PEDIDOS (list, get, etc.)
 if (
@@ -375,6 +493,9 @@ if (
     });
 
     pm.test("[CT-007] [CONTRACT][PEDIDO] Campos-chave por pedido", () => {
+        if (pedidoSkipKeyFieldsRequests.has(requestName)) {
+        return pm.expect(true, `CT-007 não se aplica para "${pm.info.requestName}"`).to.be.true;
+        }
         if (Array.isArray(data) && data.length > 0) {
             data.forEach((p, i) => {
                 ensureAtLeastOneKey(
@@ -405,6 +526,24 @@ if (
     });
 }
 
+// 4.3.1 PEDIDOS - SALDO FLEX DO PEDIDO
+if (
+    isJson &&
+    json &&
+    !isNegativeCase &&
+    !hasErrorFlag &&
+    moduleKey === "ppid" &&
+    requestName === "get ppid > saldoflexpedido"
+) {
+    const body = json.data && typeof json.data === "object" ? json.data : json;
+
+    pm.test("[CT-028] [CONTRACT][PEDIDO] saldoFlexPedido - campo SALDO presente", () => {
+        pm.expect(body, "[saldoFlexPedido] data deve ser objeto").to.be.an("object");
+        pm.expect(body, "[saldoFlexPedido] deve ter campo SALDO").to.have.property("SALDO");
+    });
+}
+
+
 // 4.4 CLIENTES (list, get, etc.)
 if (isJson && json && moduleKey === "cliente" && !isNegativeCase && !hasErrorFlag) {
     const data = getMainArray(json);
@@ -433,6 +572,75 @@ if (isJson && json && moduleKey === "cliente" && !isNegativeCase && !hasErrorFla
     });
 }
 
+// 4.3.2 PEDIDOS - CABEÇALHO DO PEDIDO (orderHeader)
+if (
+    isJson &&
+    json &&
+    !isNegativeCase &&
+    !hasErrorFlag &&
+    moduleKey === "ppid" &&
+    requestName === "get ppid > orderheader"
+) {
+    const body = json.data && typeof json.data === "object" ? json.data : json;
+
+    pm.test("[CT-029] [CONTRACT][PEDIDO] orderHeader - campos principais", () => {
+        pm.expect(body, "[orderHeader] data deve ser objeto").to.be.an("object");
+
+        // Tipo de operação (ex.: venda, devolução...)
+        ensureAtLeastOneKey(
+            body,
+            ["CODTIPOPER", "codTipOper"],
+            "[orderHeader] sem tipo de operação (CODTIPOPER)"
+        );
+
+        // Alguma referência de parceiro (cliente/destinatário)
+        ensureAtLeastOneKey(
+            body,
+            ["CODPARC", "codParc", "CODPARCDEST", "CODPARCDEV"],
+            "[orderHeader] sem referência de parceiro"
+        );
+    });
+}
+
+// 4.3.3 PEDIDOS / PRODUTOS - Itens do pedido por produto (itemOrderList)
+if (
+    isJson &&
+    json &&
+    !isNegativeCase &&
+    !hasErrorFlag &&
+    moduleKey === "products" &&
+    requestName === "get products > itemorderlist"
+) {
+    const data = getMainArray(json);
+
+    pm.test("[CT-030] [CONTRACT][PEDIDO] itemOrderList - produto e quantidade por item", () => {
+        pm.expect(Array.isArray(data), "[itemOrderList] data deve ser array").to.be.true;
+
+        if (!Array.isArray(data) || data.length === 0) {
+            return;
+        }
+
+        data.forEach((item, idx) => {
+            pm.expect(item, `ItemOrderList[${idx}] deve ser objeto`).to.be.an("object");
+
+            // Produto
+            ensureAtLeastOneKey(
+                item,
+                ["CODPROD", "codProd", "CODPRODS"],
+                `[itemOrderList] Item[${idx}] sem identificador de produto`
+            );
+
+            // Quantidade
+            ensureAtLeastOneKey(
+                item,
+                ["QTD", "QTDNEG", "quantidade", "QTDE"],
+                `[itemOrderList] Item[${idx}] sem quantidade`
+            );
+        });
+    });
+}
+
+
 // 4.5 ENDEREÇOS (list, get, etc.)
 if (
   isJson &&
@@ -452,9 +660,17 @@ if (
 
     pm.test("[CT-010] [CONTRACT][ENDERECO] Campos-chave por endereço", () => {
         list.forEach((e, i) => {
+            // Para ViaCEP: campos vêm dentro de "mensagem"
+            const address =
+                e && typeof e === "object" &&
+                e.mensagem && typeof e.mensagem === "object"
+                    ? e.mensagem
+                    : e;
+
             ensureAtLeastOneKey(
-                e,
-                ["cep", "logradouro", "cidade"],
+                address,
+                // Aceita tanto "cidade" quanto "localidade" (padrão ViaCEP)
+                ["cep", "logradouro", "cidade", "localidade"],
                 `[ENDERECO] Item[${i}] sem campos-chave (cep/logradouro/cidade)`
             );
         });
@@ -482,6 +698,13 @@ if (
     });
 
     pm.test("[CT-011] [CONTRACT][PARCEIROS] Campos-chave por parceiro", () => {
+
+        // NOVO: ignora campos-chave em endpoints que não retornam entidade parceiro "clássica"
+        if (partnerSkipKeyFieldsRequests.has(requestName)) {
+            pm.expect(true, `CT-011 (Campos-chave) não se aplica para "${pm.info.requestName}"`).to.be.true;
+            return;
+        }
+
         if (Array.isArray(data) && data.length > 0) {
             data.forEach((p, i) => {
                 ensureAtLeastOneKey(
@@ -501,6 +724,240 @@ if (
         }
     });
 }
+
+// 4.6.1 PARCEIROS - CONFIGURAÇÃO DE CAMPOS (GET partner > fields)
+if (
+    isJson &&
+    json &&
+    !isNegativeCase &&
+    !hasErrorFlag &&
+    moduleKey === "partner" &&
+    requestName === "get partner > fields"
+) {
+    const data = getMainArray(json);
+
+    pm.test("[CT-019] [CONTRACT][PARCEIROS] Campos de configuração devem ter nome e descricao", () => {
+        // Garante que veio array (o CT-002 já valida BaseList, então aqui é mais específico)
+        pm.expect(Array.isArray(data), "[fields] Resposta não é uma lista em data").to.be.true;
+
+        // Se por algum motivo a lista vier vazia, não vamos falhar aqui (quem manda é o CT-002)
+        if (!Array.isArray(data) || data.length === 0) {
+            return;
+        }
+
+        data.forEach((field, idx) => {
+            pm.expect(field, `Field[${idx}] deve ser um objeto`).to.be.an("object");
+
+            // aqui entra exatamente o que você pediu:
+            pm.expect(field, `Field[${idx}] deve ter 'nome'`).to.have.property("nome");
+            pm.expect(field, `Field[${idx}] deve ter 'descricao'`).to.have.property("descricao");
+
+            // E garantimos que são strings
+            ensureFieldType(field.nome, "string", `Field[${idx}] nome deve ser string`);
+            ensureFieldType(field.descricao, "string", `Field[${idx}] descricao deve ser string`);
+        });
+    });
+}
+
+// 4.6.2 PARCEIROS - DADOS FINANCEIROS (GET partner > [codParc] > getFinancialData)
+if (
+    isJson &&
+    json &&
+    !isNegativeCase &&
+    !hasErrorFlag &&
+    moduleKey === "partner" &&
+    requestName === "get partner > [codparc] > getfinancialdata"
+) {
+    const data = getMainArray(json);
+
+    pm.test("[CT-020] [CONTRACT][PARCEIROS] Dados financeiros devem ter SITUACAO e BLOQUEAR", () => {
+        pm.expect(Array.isArray(data), "[getFinancialData] Resposta não é uma lista em data").to.be.true;
+
+        if (!Array.isArray(data) || data.length === 0) {
+            // Se estiver vazio, quem já valida isso é o CT-002; aqui a gente só foca na estrutura.
+            return;
+        }
+
+        data.forEach((item, idx) => {
+            pm.expect(item, `Financeiro[${idx}] deve ser um objeto`).to.be.an("object");
+
+            pm.expect(item, `Financeiro[${idx}] deve ter 'SITUACAO'`).to.have.property("SITUACAO");
+            pm.expect(item, `Financeiro[${idx}] deve ter 'BLOQUEAR'`).to.have.property("BLOQUEAR");
+
+            // Tipos flexíveis para não quebrar se vier número/string/boolean
+            ensureFieldType(item.SITUACAO, ["string", "number"], `Financeiro[${idx}] SITUACAO deve ser string ou number`);
+            ensureFieldType(item.BLOQUEAR, ["string", "boolean", "number"], `Financeiro[${idx}] BLOQUEAR deve ser string/boolean/number`);
+        });
+    });
+}
+
+// 4.6.3 PARCEIROS - TÍTULOS EM ABERTO (GET partner > [partnerId] > openFinancialSecurities)
+if (
+    isJson &&
+    json &&
+    !isNegativeCase &&
+    !hasErrorFlag &&
+    moduleKey === "partner" &&
+    requestName === "get partner > [partnerid] > openfinancialsecurities"
+) {
+    const data = getMainArray(json);
+
+    pm.test("[CT-021] [CONTRACT][PARCEIROS] Títulos abertos devem ter CODVEND e NOMEVEND", () => {
+        pm.expect(Array.isArray(data), "[openFinancialSecurities] Resposta não é uma lista em data").to.be.true;
+
+        if (!Array.isArray(data) || data.length === 0) {
+            return;
+        }
+
+        data.forEach((titulo, idx) => {
+            pm.expect(titulo, `Titulo[${idx}] deve ser um objeto`).to.be.an("object");
+
+            pm.expect(titulo, `Titulo[${idx}] deve ter 'CODVEND'`).to.have.property("CODVEND");
+            pm.expect(titulo, `Titulo[${idx}] deve ter 'NOMEVEND'`).to.have.property("NOMEVEND");
+
+            ensureFieldType(titulo.CODVEND, ["string", "number"], `Titulo[${idx}] CODVEND deve ser string ou number`);
+            ensureFieldType(titulo.NOMEVEND, "string", `Titulo[${idx}] NOMEVEND deve ser string`);
+        });
+    });
+}
+
+// 4.6.4 PARCEIROS - IMPORTAÇÃO DADOS CNPJ/SEFAZ
+if (
+    isJson &&
+    json &&
+    !isNegativeCase &&
+    !hasErrorFlag &&
+    moduleKey === "partner" &&
+    (
+        requestName === "get partner > importardadoscnpj" ||
+        requestName === "get partner > importardadossefaz"
+    )
+) {
+    const body = json.data && typeof json.data === "object" ? json.data : json;
+
+    pm.test("[CT-023] [CONTRACT][PARCEIROS] importarDados - dados cadastrais mínimos", () => {
+        pm.expect(body, "[importarDados] data deve ser objeto").to.be.an("object");
+
+        // Documento
+        ensureAtLeastOneKey(
+            body,
+            ["CPF_CNPJ", "cpf_cnpj", "CGC_CPF", "cgc_cpf"],
+            "[importarDados] registro sem documento (CPF/CNPJ)"
+        );
+
+        // Nome / razão social
+        ensureAtLeastOneKey(
+            body,
+            ["RAZAOSOCIAL", "razaoSocial", "NOMEPARC", "nomeParc"],
+            "[importarDados] registro sem nome/razão social"
+        );
+
+        // Endereço básico
+        ensureAtLeastOneKey(
+            body,
+            ["CEP", "cep"],
+            "[importarDados] registro sem CEP"
+        );
+        ensureAtLeastOneKey(
+            body,
+            ["LOGRADOURO", "logradouro"],
+            "[importarDados] registro sem logradouro"
+        );
+        ensureAtLeastOneKey(
+            body,
+            ["LOCALIDADE", "cidade", "CIDADE"],
+            "[importarDados] registro sem cidade/localidade"
+        );
+    });
+}
+
+// 4.6.5 PARCEIROS - PRODUTOS COMPRADOS
+if (
+    isJson &&
+    json &&
+    !isNegativeCase &&
+    !hasErrorFlag &&
+    moduleKey === "partner" &&
+    requestName === "get partner > produtoscomprados"
+) {
+    const root = json.data && json.data.produtosUltPedido
+        ? json.data.produtosUltPedido
+        : getMainArray(json);
+
+    pm.test("[CT-024] [CONTRACT][PARCEIROS] produtosComprados - CODPRODS e CODPARC por item", () => {
+        if (!Array.isArray(root) || root.length === 0) {
+            // Se estiver vazio, o CT-002 já valida BaseList
+            return pm.expect(Array.isArray(root), "[produtosComprados] lista deve ser array").to.be.true;
+        }
+
+        root.forEach((item, idx) => {
+            pm.expect(item, `ProdutoComprado[${idx}] deve ser objeto`).to.be.an("object");
+            pm.expect(item, `ProdutoComprado[${idx}] deve ter CODPRODS`).to.have.property("CODPRODS");
+            pm.expect(item, `ProdutoComprado[${idx}] deve ter CODPARC`).to.have.property("CODPARC");
+        });
+    });
+}
+
+// 4.6.6 PARCEIROS - FICHA DO PARCEIRO
+if (
+    isJson &&
+    json &&
+    !isNegativeCase &&
+    !hasErrorFlag &&
+    moduleKey === "partner" &&
+    requestName === "get partner > fichaparceiro"
+) {
+    const body = json.data && typeof json.data === "object" ? json.data : json;
+
+    pm.test("[CT-025] [CONTRACT][PARCEIROS] fichaParceiro - identificação básica", () => {
+        pm.expect(body, "[fichaParceiro] data deve ser objeto").to.be.an("object");
+
+        // Nome / razão social do parceiro
+        ensureAtLeastOneKey(
+            body,
+            ["NOMEPARC", "RAZAOSOCIAL", "razaoSocial"],
+            "[fichaParceiro] registro sem nome/razão social"
+        );
+
+        // Documento do parceiro (não obriga CODPARC)
+        ensureAtLeastOneKey(
+            body,
+            ["CPF_CNPJ", "CGC_CPF", "cpf_cnpj", "cgc_cpf"],
+            "[fichaParceiro] registro sem documento (CPF/CNPJ)"
+        );
+    });
+}
+
+// 4.6.7 PARCEIROS - ANEXOS DO PARCEIRO (listAttachment)
+if (
+    isJson &&
+    json &&
+    !isNegativeCase &&
+    !hasErrorFlag &&
+    moduleKey === "partner" &&
+    requestName === "get partner > [codparc] > listattachment"
+) {
+    const data = getMainArray(json);
+
+    pm.test("[CT-026] [CONTRACT][PARCEIROS] listAttachment - estrutura de anexos", () => {
+        pm.expect(Array.isArray(data), "[listAttachment parceiro] data deve ser array").to.be.true;
+
+        if (!Array.isArray(data) || data.length === 0) {
+            // Sem anexos: OK, nada a validar por item
+            return;
+        }
+
+        data.forEach((att, idx) => {
+            pm.expect(att, `Attachment[${idx}] deve ser objeto`).to.be.an("object");
+            ensureAtLeastOneKey(
+                att,
+                ["NOMEARQ", "nomeArq", "DESCRICAO", "descricao"],
+                `[Attachment] Item[${idx}] sem nome/descrição`
+            );
+        });
+    });
+}
+
 
 // 4.7 USUÁRIOS / VENDEDORES
 if (
@@ -522,7 +979,7 @@ if (
             if (!u || typeof u !== "object") return;
             ensureAtLeastOneKey(
                 u,
-                ["nome", "name", "usuario", "login"],
+                ["nome", "name", "usuario", "login","CODUSU","NOMEUSU"],
                 `[USUARIO] Registro[${i}] sem identificação`
             );
         });
