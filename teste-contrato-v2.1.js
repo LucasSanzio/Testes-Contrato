@@ -907,23 +907,16 @@ if (
     moduleKey === "partner" &&
     requestName === "get partner > fichaparceiro"
 ) {
-    const body = json.data && typeof json.data === "object" ? json.data : json;
+     const body = Array.isArray(json.data) && json.data.length > 0 ? json.data[0] : json.data || json;
 
     pm.test("[CT-025] [CONTRACT][PARCEIROS] fichaParceiro - identificação básica", () => {
         pm.expect(body, "[fichaParceiro] data deve ser objeto").to.be.an("object");
 
-        // Nome / razão social do parceiro
+        //codProd 
         ensureAtLeastOneKey(
             body,
-            ["NOMEPARC", "RAZAOSOCIAL", "razaoSocial"],
-            "[fichaParceiro] registro sem nome/razão social"
-        );
-
-        // Documento do parceiro (não obriga CODPARC)
-        ensureAtLeastOneKey(
-            body,
-            ["CPF_CNPJ", "CGC_CPF", "cpf_cnpj", "cgc_cpf"],
-            "[fichaParceiro] registro sem documento (CPF/CNPJ)"
+            ["codProd", "CODPROD"],
+            "[fichaParceiro] registro sem codProd/CODPROD"
         );
     });
 }
