@@ -33,4 +33,3 @@
     headers.add({ key: headerKey, value });
   }
 })();
-
